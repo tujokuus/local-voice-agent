@@ -52,8 +52,15 @@ class Session(BaseModel):
     detected_language_probability: float | None = None
     error_message: str | None = None
 
+    @property
+    def processing_duration_seconds(self) -> float | None:
+        """Elapsed processing time derived from persisted lifecycle timestamps."""
+
+        if self.completed_at is None:
+            return None
+        return max(0.0, (self.completed_at - self.created_at).total_seconds())
+
 
 class StoredTranscriptSegment(TranscriptSegment):
     id: int
     session_id: int
-

@@ -14,6 +14,15 @@ from local_voice_agent.storage import Database
 from local_voice_agent.transcription import FasterWhisperTranscriber
 
 
+def _configure_stdio() -> None:
+    """Keep transcript output Unicode-safe on Windows and redirected streams."""
+
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def _format_timestamp(seconds: float) -> str:
     total_seconds = max(0, int(seconds))
     hours, remainder = divmod(total_seconds, 3600)
@@ -84,6 +93,11 @@ def _process(args: argparse.Namespace, settings: Settings) -> int:
     print(f"Stored {segment_count} timestamped transcript segments.")
     if session and session.duration_seconds is not None:
         print(f"Audio duration: {_format_timestamp(session.duration_seconds)}")
+    if session and session.processing_duration_seconds is not None:
+        print(
+            "Processing time: "
+            f"{_format_timestamp(session.processing_duration_seconds)}"
+        )
     print(f"Session ID: {session_id}")
     return 0
 
@@ -101,6 +115,13 @@ def _show(args: argparse.Namespace, settings: Settings) -> int:
     print(f"Audio: {session.source_audio_path}")
     print(f"Language: {session.language}")
     print(f"Transcription model: {session.transcription_model}")
+    if session.duration_seconds is not None:
+        print(f"Audio duration: {_format_timestamp(session.duration_seconds)}")
+    if session.processing_duration_seconds is not None:
+        print(
+            "Processing time: "
+            f"{_format_timestamp(session.processing_duration_seconds)}"
+        )
     if session.error_message:
         print(f"Error: {session.error_message}")
 
@@ -126,13 +147,19 @@ def _sessions(args: argparse.Namespace, settings: Settings) -> int:
         return 0
 
     for session in sessions:
-        duration = (
+        audio_duration = (
             _format_timestamp(session.duration_seconds)
             if session.duration_seconds is not None
             else "--:--:--"
         )
+        processing_duration = (
+            _format_timestamp(session.processing_duration_seconds)
+            if session.processing_duration_seconds is not None
+            else "--:--:--"
+        )
         print(
-            f"{session.id:>4}  {session.status.value:<10}  {duration}  "
+            f"{session.id:>4}  {session.status.value:<10}  "
+            f"audio={audio_duration}  processing={processing_duration}  "
             f"{session.source_audio_path.name}"
         )
     return 0
@@ -181,6 +208,7 @@ def _doctor(_: argparse.Namespace, settings: Settings) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _configure_stdio()
     try:
         settings = Settings.from_environment()
         parser = _build_parser(settings)
@@ -200,4 +228,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

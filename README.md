@@ -46,6 +46,7 @@ Speaker diarization, realtime recording, GUIs, mobile clients, embeddings, and c
 - Check the local Python, faster-whisper, Pydantic, and Ollama environment.
 - Process one local English audio file with `faster-whisper`.
 - Store session metadata and timestamped transcript segments in SQLite.
+- Display both audio duration and elapsed processing time for completed sessions.
 - List stored sessions.
 - Print a stored transcript with readable timestamps.
 - Record failed processing attempts without losing the error context.
