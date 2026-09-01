@@ -1,0 +1,203 @@
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+from local_voice_agent.config import Settings
+from local_voice_agent.models import SessionStatus
+from local_voice_agent.service import SessionProcessor
+from local_voice_agent.storage import Database
+from local_voice_agent.transcription import FasterWhisperTranscriber
+
+
+def _format_timestamp(seconds: float) -> str:
+    total_seconds = max(0, int(seconds))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _database(settings: Settings, override: Path | None) -> Database:
+    return Database((override or settings.database_path).expanduser().resolve())
+
+
+def _build_parser(settings: Settings) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="local-voice-agent",
+        description="Process English audio locally and inspect timestamped transcripts.",
+    )
+    parser.add_argument(
+        "--database",
+        type=Path,
+        help=f"SQLite path (default: {settings.database_path})",
+    )
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    process_parser = subparsers.add_parser("process", help="Transcribe and store an audio file")
+    process_parser.add_argument("audio_file", type=Path)
+    process_parser.add_argument("--model", default=settings.whisper_model)
+    process_parser.add_argument("--device", default=settings.whisper_device)
+    process_parser.add_argument("--compute-type", default=settings.whisper_compute_type)
+    process_parser.add_argument("--beam-size", type=int, default=settings.whisper_beam_size)
+
+    show_parser = subparsers.add_parser("show", help="Show one stored session transcript")
+    show_parser.add_argument("session_id", type=int)
+
+    subparsers.add_parser("sessions", help="List stored sessions")
+    subparsers.add_parser("doctor", help="Check local runtime prerequisites")
+    return parser
+
+
+def _process(args: argparse.Namespace, settings: Settings) -> int:
+    if args.beam_size < 1:
+        raise ValueError("--beam-size must be at least 1")
+
+    database = _database(settings, args.database)
+    transcriber = FasterWhisperTranscriber(
+        model_name=args.model,
+        language=settings.transcription_language,
+        device=args.device,
+        compute_type=args.compute_type,
+        beam_size=args.beam_size,
+    )
+    processor = SessionProcessor(
+        database=database,
+        transcriber=transcriber,
+        language=settings.transcription_language,
+        transcription_model=args.model,
+    )
+
+    print(f"Loading audio: {args.audio_file}")
+    print(
+        "Transcribing locally "
+        f"(model={args.model}, device={args.device}, compute_type={args.compute_type})..."
+    )
+    session_id = processor.process(args.audio_file)
+    session = database.get_session(session_id)
+    segment_count = len(database.get_transcript(session_id))
+
+    print(f"Stored {segment_count} timestamped transcript segments.")
+    if session and session.duration_seconds is not None:
+        print(f"Audio duration: {_format_timestamp(session.duration_seconds)}")
+    print(f"Session ID: {session_id}")
+    return 0
+
+
+def _show(args: argparse.Namespace, settings: Settings) -> int:
+    database = _database(settings, args.database)
+    database.initialize()
+    session = database.get_session(args.session_id)
+    if session is None:
+        print(f"Session {args.session_id} was not found.", file=sys.stderr)
+        return 1
+
+    print(f"Session {session.id}")
+    print(f"Status: {session.status.value}")
+    print(f"Audio: {session.source_audio_path}")
+    print(f"Language: {session.language}")
+    print(f"Transcription model: {session.transcription_model}")
+    if session.error_message:
+        print(f"Error: {session.error_message}")
+
+    segments = database.get_transcript(session.id)
+    if not segments:
+        print("\nNo transcript segments stored.")
+        return 0 if session.status is not SessionStatus.FAILED else 1
+
+    print("\nTranscript")
+    for segment in segments:
+        start = _format_timestamp(segment.start_seconds)
+        end = _format_timestamp(segment.end_seconds)
+        print(f"[{start} - {end}] {segment.text}")
+    return 0
+
+
+def _sessions(args: argparse.Namespace, settings: Settings) -> int:
+    database = _database(settings, args.database)
+    database.initialize()
+    sessions = database.list_sessions()
+    if not sessions:
+        print("No sessions stored.")
+        return 0
+
+    for session in sessions:
+        duration = (
+            _format_timestamp(session.duration_seconds)
+            if session.duration_seconds is not None
+            else "--:--:--"
+        )
+        print(
+            f"{session.id:>4}  {session.status.value:<10}  {duration}  "
+            f"{session.source_audio_path.name}"
+        )
+    return 0
+
+
+def _doctor(_: argparse.Namespace, settings: Settings) -> int:
+    checks: list[tuple[str, bool, str]] = []
+    checks.append(("Python >= 3.12", sys.version_info >= (3, 12), sys.version.split()[0]))
+    checks.append(
+        (
+            "pydantic installed",
+            importlib.util.find_spec("pydantic") is not None,
+            "required for application models",
+        )
+    )
+    checks.append(
+        (
+            "faster-whisper installed",
+            importlib.util.find_spec("faster_whisper") is not None,
+            "required for transcription",
+        )
+    )
+
+    ollama_path = shutil.which("ollama")
+    ollama_detail = "not found"
+    if ollama_path:
+        result = subprocess.run(
+            [ollama_path, "--version"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        ollama_detail = (result.stdout or result.stderr).strip()
+    checks.append(("Ollama available", ollama_path is not None, ollama_detail))
+
+    for label, passed, detail in checks:
+        marker = "OK" if passed else "MISSING"
+        print(f"[{marker:<7}] {label}: {detail}")
+
+    print("\nEffective transcription settings")
+    print(f"Language: {settings.transcription_language}")
+    print(f"Model: {settings.whisper_model}")
+    print(f"Device: {settings.whisper_device}")
+    print(f"Compute type: {settings.whisper_compute_type}")
+    return 0 if all(passed for _, passed, _ in checks) else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        settings = Settings.from_environment()
+        parser = _build_parser(settings)
+        args = parser.parse_args(argv)
+
+        handlers = {
+            "process": _process,
+            "show": _show,
+            "sessions": _sessions,
+            "doctor": _doctor,
+        }
+        return handlers[args.command](args, settings)
+    except (FileNotFoundError, LookupError, RuntimeError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+

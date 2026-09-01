@@ -1,5 +1,19 @@
 # Local Voice Agent MVP Plan
 
+## Current progress
+
+The first end-to-end slice is implemented and manually verified:
+
+```text
+English audio file
+    → faster-whisper
+    → validated timestamped segments
+    → SQLite session and transcript storage
+    → CLI session listing and transcript display
+```
+
+The next slice begins with transcript chunking and structured checkpoint models, followed by Ollama-backed checkpoint generation.
+
 ## Goal
 
 Build a modular desktop-oriented Python MVP that processes an English audio file locally, creates a timestamped transcript and hierarchical summary, stores the results in SQLite, and answers questions through a manually implemented LLM agent.
@@ -138,4 +152,3 @@ Whisper and Ollama should also be exercised through a documented smoke test usin
 - advanced action-item tracking and cross-meeting analysis
 
 These remain future roadmap items and should not influence the first implementation beyond avoiding unnecessary coupling.
-
