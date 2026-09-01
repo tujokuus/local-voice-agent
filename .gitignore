@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Runtime data and downloaded models
+data/
+models/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Audio and video test material
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
+*.mp4
+*.mkv
+*.webm
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
