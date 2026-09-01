@@ -2,8 +2,9 @@
 
 Local Voice Agent is a learning-focused, local-first Python application for turning English audio recordings into timestamped transcripts, structured meeting or lecture summaries, and evidence-based answers.
 
-> Status: the first end-to-end slice is working. English audio can be transcribed
-> locally and stored as timestamped SQLite segments.
+> Status: transcription and hierarchical summarization slices are working. English
+> audio can be transcribed locally, stored with timestamps, split into checkpoints,
+> and summarized by a local Ollama model.
 
 ## MVP pipeline
 
@@ -50,8 +51,11 @@ Speaker diarization, realtime recording, GUIs, mobile clients, embeddings, and c
 - List stored sessions.
 - Print a stored transcript with readable timestamps.
 - Record failed processing attempts without losing the error context.
+- Group complete transcript segments into approximately five-minute chunks.
+- Generate Pydantic-validated checkpoint and final-summary structures with Ollama.
+- Store and display checkpoint evidence ranges and final summaries in SQLite.
 
-Checkpoint summaries, the Ollama provider, transcript search, and the manual agent loop are the next implementation slices.
+Transcript search and the manual tool-calling agent loop are the next implementation slices.
 
 ## Setup
 
@@ -61,6 +65,12 @@ Python 3.12 or newer and Ollama are expected to be installed locally. On PowerSh
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e .
 .\.venv\Scripts\python.exe -m local_voice_agent doctor
+```
+
+Pull or verify the default local summary model:
+
+```powershell
+ollama pull qwen3.5:4b
 ```
 
 The initial defaults use `small.en` on CPU with `int8` computation. The first use of a Whisper model downloads its weights from Hugging Face. Audio decoding is handled by PyAV, so a separate system FFmpeg installation is not required by `faster-whisper`.
@@ -86,6 +96,21 @@ List stored sessions and inspect one transcript:
 .\.venv\Scripts\python.exe -m local_voice_agent show 1
 ```
 
+Create approximately five-minute checkpoints and a final summary from an existing transcript:
+
+```powershell
+.\.venv\Scripts\python.exe -m local_voice_agent summarize 2
+.\.venv\Scripts\python.exe -m local_voice_agent summary 2
+```
+
+The default model is `qwen3.5:4b`. An installed alternative can be selected explicitly:
+
+```powershell
+.\.venv\Scripts\python.exe -m local_voice_agent summarize 2 --model qwen3.5:9b
+```
+
+Summarization reads the stored transcript and does not run Whisper again. A successful rerun atomically replaces the previous derived checkpoints and final summary for that session.
+
 The default database is `data/local_voice_agent.db`. Put `--database PATH` before the subcommand to use another database.
 
 ### Configuration
@@ -101,6 +126,11 @@ The defaults can be overridden with environment variables:
 | `LVA_WHISPER_DEVICE` | `cpu` |
 | `LVA_WHISPER_COMPUTE_TYPE` | `int8` |
 | `LVA_WHISPER_BEAM_SIZE` | `5` |
+| `LVA_OLLAMA_BASE_URL` | `http://127.0.0.1:11434` |
+| `LVA_OLLAMA_MODEL` | `qwen3.5:4b` |
+| `LVA_OLLAMA_TIMEOUT_SECONDS` | `600` |
+| `LVA_CHECKPOINT_TARGET_SECONDS` | `300` |
+| `LVA_MINIMUM_FINAL_CHUNK_SECONDS` | `120` |
 
 The MVP intentionally supports only English even though the language is configurable for future development.
 
@@ -112,6 +142,14 @@ src/local_voice_agent/
 ├── config.py               environment-backed settings
 ├── models.py               validated application models
 ├── service.py              audio processing use case
+├── llm/
+│   ├── base.py             provider protocol and structured response types
+│   └── ollama_provider.py  local Ollama HTTP adapter
+├── summaries/
+│   ├── chunking.py         timestamp-aware transcript grouping
+│   ├── models.py           checkpoint and final-summary schemas
+│   ├── prompts.py          evidence-constrained English prompts
+│   └── summarizer.py       hierarchical summary orchestration
 ├── storage/database.py     SQLite boundary and schema
 └── transcription/
     ├── base.py             provider protocol
@@ -135,3 +173,5 @@ See [docs/MVP_PLAN.md](docs/MVP_PLAN.md) for the detailed plan.
 Use an English recording that you created yourself or that is clearly licensed for reuse, such as public-domain or Creative Commons material. A short recording is preferable for the first technical checks.
 
 The first capability check was completed with OpenAI Whisper's small `tests/jfk.flac` fixture and the `tiny.en` model. The downloaded audio and runtime database live under ignored `data/` and are not committed.
+
+The summary slice was verified with a 15-minute English spoken article. It produced three checkpoints and a final summary with `qwen3.5:4b` while correctly leaving unsupported decisions, action items, and open questions empty.

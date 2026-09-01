@@ -25,6 +25,11 @@ class Settings:
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
     whisper_beam_size: int = 5
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    ollama_model: str = "qwen3.5:4b"
+    ollama_timeout_seconds: float = 600
+    checkpoint_target_seconds: float = 300
+    minimum_final_chunk_seconds: float = 120
 
     @classmethod
     def from_environment(cls) -> Settings:
@@ -37,6 +42,16 @@ class Settings:
         if beam_size < 1:
             raise ValueError("LVA_WHISPER_BEAM_SIZE must be at least 1")
 
+        def positive_float(name: str, default: str) -> float:
+            raw_value = _env(name, default)
+            try:
+                value = float(raw_value)
+            except ValueError as exc:
+                raise ValueError(f"{name} must be a number") from exc
+            if value <= 0:
+                raise ValueError(f"{name} must be greater than zero")
+            return value
+
         return cls(
             app_language=_env("LVA_APP_LANGUAGE", "en"),
             transcription_language=_env("LVA_TRANSCRIPTION_LANGUAGE", "en"),
@@ -45,5 +60,13 @@ class Settings:
             whisper_device=_env("LVA_WHISPER_DEVICE", "cpu"),
             whisper_compute_type=_env("LVA_WHISPER_COMPUTE_TYPE", "int8"),
             whisper_beam_size=beam_size,
+            ollama_base_url=_env("LVA_OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
+            ollama_model=_env("LVA_OLLAMA_MODEL", "qwen3.5:4b"),
+            ollama_timeout_seconds=positive_float("LVA_OLLAMA_TIMEOUT_SECONDS", "600"),
+            checkpoint_target_seconds=positive_float(
+                "LVA_CHECKPOINT_TARGET_SECONDS", "300"
+            ),
+            minimum_final_chunk_seconds=positive_float(
+                "LVA_MINIMUM_FINAL_CHUNK_SECONDS", "120"
+            ),
         )
-

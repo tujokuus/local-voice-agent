@@ -2,7 +2,7 @@
 
 ## Current progress
 
-The first end-to-end slice is implemented and manually verified:
+The first two end-to-end slices are implemented and manually verified:
 
 ```text
 English audio file
@@ -10,9 +10,13 @@ English audio file
     → validated timestamped segments
     → SQLite session and transcript storage
     → CLI session listing and transcript display
+    → approximately five-minute chunks
+    → local Ollama structured checkpoint generation
+    → checkpoint-based final summary
+    → SQLite summary storage and CLI display
 ```
 
-The next slice begins with transcript chunking and structured checkpoint models, followed by Ollama-backed checkpoint generation.
+The next slice begins with bounded transcript search, followed by the tool registry and manual agent loop.
 
 ## Goal
 

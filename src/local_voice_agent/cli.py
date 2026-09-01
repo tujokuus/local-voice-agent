@@ -8,9 +8,11 @@ import sys
 from pathlib import Path
 
 from local_voice_agent.config import Settings
+from local_voice_agent.llm import OllamaProvider
 from local_voice_agent.models import SessionStatus
 from local_voice_agent.service import SessionProcessor
 from local_voice_agent.storage import Database
+from local_voice_agent.summaries import SessionSummarizer, StoredFinalSummary
 from local_voice_agent.transcription import FasterWhisperTranscriber
 
 
@@ -58,6 +60,25 @@ def _build_parser(settings: Settings) -> argparse.ArgumentParser:
     show_parser.add_argument("session_id", type=int)
 
     subparsers.add_parser("sessions", help="List stored sessions")
+
+    summarize_parser = subparsers.add_parser(
+        "summarize", help="Create structured checkpoints and a final summary"
+    )
+    summarize_parser.add_argument("session_id", type=int)
+    summarize_parser.add_argument("--model", default=settings.ollama_model)
+    summarize_parser.add_argument("--ollama-url", default=settings.ollama_base_url)
+    summarize_parser.add_argument(
+        "--timeout", type=float, default=settings.ollama_timeout_seconds
+    )
+    summarize_parser.add_argument(
+        "--chunk-seconds", type=float, default=settings.checkpoint_target_seconds
+    )
+
+    summary_parser = subparsers.add_parser(
+        "summary", help="Show stored checkpoints and final summary"
+    )
+    summary_parser.add_argument("session_id", type=int)
+
     subparsers.add_parser("doctor", help="Check local runtime prerequisites")
     return parser
 
@@ -165,6 +186,128 @@ def _sessions(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def _summarize(args: argparse.Namespace, settings: Settings) -> int:
+    if args.timeout <= 0:
+        raise ValueError("--timeout must be greater than zero")
+    if args.chunk_seconds <= 0:
+        raise ValueError("--chunk-seconds must be greater than zero")
+
+    database = _database(settings, args.database)
+    database.initialize()
+    session = database.get_session(args.session_id)
+    if session is None:
+        raise LookupError(f"Session {args.session_id} was not found")
+    if session.status is not SessionStatus.COMPLETED:
+        raise ValueError(
+            f"Session {session.id} has status {session.status.value} and cannot be summarized"
+        )
+
+    transcript = database.get_transcript(session.id)
+    if not transcript:
+        raise ValueError(f"Session {session.id} has no transcript segments")
+
+    provider = OllamaProvider(
+        model_name=args.model,
+        base_url=args.ollama_url,
+        timeout_seconds=args.timeout,
+    )
+    summarizer = SessionSummarizer(
+        provider=provider,
+        target_chunk_seconds=args.chunk_seconds,
+        minimum_final_chunk_seconds=min(
+            settings.minimum_final_chunk_seconds,
+            args.chunk_seconds / 2,
+        ),
+    )
+
+    print(f"Summarizing session {session.id} with {args.model}...")
+
+    def report_progress(current: int, total: int) -> None:
+        print(f"Creating checkpoint {current}/{total}...")
+
+    bundle = summarizer.summarize(
+        transcript,
+        progress=report_progress,
+        final_progress=lambda: print("Creating final session summary..."),
+    )
+    database.replace_summaries(
+        session_id=session.id,
+        model_name=args.model,
+        bundle=bundle,
+    )
+
+    print(f"Stored {len(bundle.checkpoints)} structured checkpoints.")
+    print(f"Summary processing time: {_format_timestamp(bundle.processing_seconds)}")
+    print("\nOverall summary")
+    print(bundle.final_summary.overall_summary)
+    return 0
+
+
+def _summary(args: argparse.Namespace, settings: Settings) -> int:
+    database = _database(settings, args.database)
+    database.initialize()
+    session = database.get_session(args.session_id)
+    if session is None:
+        raise LookupError(f"Session {args.session_id} was not found")
+
+    final_summary = database.get_final_summary(session.id)
+    if final_summary is None:
+        print(
+            f"Session {session.id} has no stored summary. "
+            f"Run 'local-voice-agent summarize {session.id}' first."
+        )
+        return 1
+
+    checkpoints = database.get_summary_checkpoints(session.id)
+    print(f"Session {session.id} summary")
+    print(f"Model: {final_summary.model_name}")
+    print(f"Checkpoints: {final_summary.checkpoint_count}")
+    if final_summary.processing_seconds is not None:
+        print(
+            "Summary processing time: "
+            f"{_format_timestamp(final_summary.processing_seconds)}"
+        )
+
+    print("\nOverall summary")
+    print(final_summary.overall_summary)
+    _print_string_list("Main topics", final_summary.main_topics)
+    _print_string_list("Decisions", final_summary.decisions)
+    _print_action_items(final_summary)
+    _print_string_list("Open questions", final_summary.open_questions)
+
+    print("\nCheckpoints")
+    for checkpoint in checkpoints:
+        start = _format_timestamp(checkpoint.start_seconds)
+        end = _format_timestamp(checkpoint.end_seconds)
+        duration = (
+            f"; generated in {_format_timestamp(checkpoint.generation_seconds)}"
+            if checkpoint.generation_seconds is not None
+            else ""
+        )
+        print(f"\n{checkpoint.chunk_index + 1}. [{start} - {end}]{duration}")
+        print(checkpoint.summary)
+    return 0
+
+
+def _print_string_list(title: str, items: list[str]) -> None:
+    print(f"\n{title}")
+    if not items:
+        print("- None")
+        return
+    for item in items:
+        print(f"- {item}")
+
+
+def _print_action_items(summary: StoredFinalSummary) -> None:
+    print("\nAction items")
+    if not summary.action_items:
+        print("- None")
+        return
+    for item in summary.action_items:
+        owner = f" (owner: {item.owner})" if item.owner else ""
+        print(f"- {item.task}{owner}")
+
+
 def _doctor(_: argparse.Namespace, settings: Settings) -> int:
     checks: list[tuple[str, bool, str]] = []
     checks.append(("Python >= 3.12", sys.version_info >= (3, 12), sys.version.split()[0]))
@@ -204,6 +347,8 @@ def _doctor(_: argparse.Namespace, settings: Settings) -> int:
     print(f"Model: {settings.whisper_model}")
     print(f"Device: {settings.whisper_device}")
     print(f"Compute type: {settings.whisper_compute_type}")
+    print(f"Ollama URL: {settings.ollama_base_url}")
+    print(f"Ollama model: {settings.ollama_model}")
     return 0 if all(passed for _, passed, _ in checks) else 1
 
 
@@ -218,6 +363,8 @@ def main(argv: list[str] | None = None) -> int:
             "process": _process,
             "show": _show,
             "sessions": _sessions,
+            "summarize": _summarize,
+            "summary": _summary,
             "doctor": _doctor,
         }
         return handlers[args.command](args, settings)

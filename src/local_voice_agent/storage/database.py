@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -11,9 +12,14 @@ from local_voice_agent.models import (
     StoredTranscriptSegment,
     TranscriptionResult,
 )
+from local_voice_agent.summaries.models import (
+    GeneratedSummaryBundle,
+    StoredFinalSummary,
+    StoredSummaryCheckpoint,
+)
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class Database:
@@ -66,6 +72,47 @@ class Database:
 
                 CREATE INDEX IF NOT EXISTS idx_transcript_segments_session_time
                     ON transcript_segments(session_id, start_seconds, end_seconds);
+
+                CREATE TABLE IF NOT EXISTS summary_checkpoints (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
+                    start_seconds REAL NOT NULL CHECK (start_seconds >= 0),
+                    end_seconds REAL NOT NULL CHECK (end_seconds > start_seconds),
+                    summary TEXT NOT NULL CHECK (length(trim(summary)) > 0),
+                    topics_json TEXT NOT NULL,
+                    decisions_json TEXT NOT NULL,
+                    action_items_json TEXT NOT NULL,
+                    open_questions_json TEXT NOT NULL,
+                    model_name TEXT NOT NULL,
+                    raw_response TEXT NOT NULL,
+                    generation_seconds REAL CHECK (
+                        generation_seconds IS NULL OR generation_seconds >= 0
+                    ),
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (session_id, chunk_index)
+                );
+
+                CREATE TABLE IF NOT EXISTS final_summaries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id INTEGER NOT NULL UNIQUE
+                        REFERENCES sessions(id) ON DELETE CASCADE,
+                    overall_summary TEXT NOT NULL CHECK (length(trim(overall_summary)) > 0),
+                    main_topics_json TEXT NOT NULL,
+                    decisions_json TEXT NOT NULL,
+                    action_items_json TEXT NOT NULL,
+                    open_questions_json TEXT NOT NULL,
+                    model_name TEXT NOT NULL,
+                    checkpoint_count INTEGER NOT NULL CHECK (checkpoint_count > 0),
+                    raw_response TEXT NOT NULL,
+                    processing_seconds REAL CHECK (
+                        processing_seconds IS NULL OR processing_seconds >= 0
+                    ),
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_summary_checkpoints_session_time
+                    ON summary_checkpoints(session_id, start_seconds, end_seconds);
                 """
             )
             connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -176,6 +223,143 @@ class Database:
             for row in rows
         ]
 
+    def replace_summaries(
+        self,
+        *,
+        session_id: int,
+        model_name: str,
+        bundle: GeneratedSummaryBundle,
+    ) -> None:
+        """Atomically replace derived summaries after all LLM calls succeed."""
+
+        with self.connect() as connection:
+            session = connection.execute(
+                "SELECT status FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+            if session is None:
+                raise LookupError(f"Session {session_id} was not found")
+            if session["status"] != SessionStatus.COMPLETED.value:
+                raise ValueError(
+                    f"Session {session_id} is not completed and cannot be summarized"
+                )
+
+            connection.execute(
+                "DELETE FROM final_summaries WHERE session_id = ?", (session_id,)
+            )
+            connection.execute(
+                "DELETE FROM summary_checkpoints WHERE session_id = ?", (session_id,)
+            )
+            connection.executemany(
+                """
+                INSERT INTO summary_checkpoints (
+                    session_id, chunk_index, start_seconds, end_seconds, summary,
+                    topics_json, decisions_json, action_items_json,
+                    open_questions_json, model_name, raw_response, generation_seconds
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        session_id,
+                        item.chunk_index,
+                        item.start_seconds,
+                        item.end_seconds,
+                        item.checkpoint.summary,
+                        self._json(item.checkpoint.topics),
+                        self._json(item.checkpoint.decisions),
+                        self._json(
+                            [action.model_dump() for action in item.checkpoint.action_items]
+                        ),
+                        self._json(item.checkpoint.open_questions),
+                        model_name,
+                        item.raw_response,
+                        item.generation_seconds,
+                    )
+                    for item in bundle.checkpoints
+                ],
+            )
+
+            final = bundle.final_summary
+            connection.execute(
+                """
+                INSERT INTO final_summaries (
+                    session_id, overall_summary, main_topics_json, decisions_json,
+                    action_items_json, open_questions_json, model_name,
+                    checkpoint_count, raw_response, processing_seconds
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    final.overall_summary,
+                    self._json(final.main_topics),
+                    self._json(final.decisions),
+                    self._json([action.model_dump() for action in final.action_items]),
+                    self._json(final.open_questions),
+                    model_name,
+                    len(bundle.checkpoints),
+                    bundle.final_raw_response,
+                    bundle.processing_seconds,
+                ),
+            )
+            connection.commit()
+
+    def get_summary_checkpoints(
+        self, session_id: int
+    ) -> list[StoredSummaryCheckpoint]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM summary_checkpoints
+                WHERE session_id = ?
+                ORDER BY chunk_index
+                """,
+                (session_id,),
+            ).fetchall()
+
+        return [
+            StoredSummaryCheckpoint(
+                id=row["id"],
+                session_id=row["session_id"],
+                chunk_index=row["chunk_index"],
+                start_seconds=row["start_seconds"],
+                end_seconds=row["end_seconds"],
+                summary=row["summary"],
+                topics=json.loads(row["topics_json"]),
+                decisions=json.loads(row["decisions_json"]),
+                action_items=json.loads(row["action_items_json"]),
+                open_questions=json.loads(row["open_questions_json"]),
+                model_name=row["model_name"],
+                generation_seconds=row["generation_seconds"],
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+    def get_final_summary(self, session_id: int) -> StoredFinalSummary | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM final_summaries WHERE session_id = ?", (session_id,)
+            ).fetchone()
+        if row is None:
+            return None
+
+        return StoredFinalSummary(
+            id=row["id"],
+            session_id=row["session_id"],
+            overall_summary=row["overall_summary"],
+            main_topics=json.loads(row["main_topics_json"]),
+            decisions=json.loads(row["decisions_json"]),
+            action_items=json.loads(row["action_items_json"]),
+            open_questions=json.loads(row["open_questions_json"]),
+            model_name=row["model_name"],
+            checkpoint_count=row["checkpoint_count"],
+            processing_seconds=row["processing_seconds"],
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _json(value: object) -> str:
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
     @staticmethod
     def _session_from_row(row: sqlite3.Row) -> Session:
         return Session(
@@ -191,4 +375,3 @@ class Database:
             detected_language_probability=row["detected_language_probability"],
             error_message=row["error_message"],
         )
-
