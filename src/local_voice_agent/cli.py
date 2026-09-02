@@ -12,7 +12,13 @@ from local_voice_agent.llm import OllamaProvider
 from local_voice_agent.models import SessionStatus
 from local_voice_agent.service import SessionProcessor
 from local_voice_agent.storage import Database
-from local_voice_agent.summaries import SessionSummarizer, StoredFinalSummary
+from local_voice_agent.summaries import (
+    EvidenceItem,
+    KeyConcept,
+    SessionSummarizer,
+    StoredFinalSummary,
+    TermToVerify,
+)
 from local_voice_agent.transcription import FasterWhisperTranscriber
 
 
@@ -73,11 +79,22 @@ def _build_parser(settings: Settings) -> argparse.ArgumentParser:
     summarize_parser.add_argument(
         "--chunk-seconds", type=float, default=settings.checkpoint_target_seconds
     )
+    summarize_parser.add_argument(
+        "--label", help="Optional name for comparing this summary run"
+    )
 
     summary_parser = subparsers.add_parser(
         "summary", help="Show stored checkpoints and final summary"
     )
     summary_parser.add_argument("session_id", type=int)
+    summary_parser.add_argument(
+        "--run-id", type=int, help="Show a specific summary run instead of the latest"
+    )
+
+    summary_runs_parser = subparsers.add_parser(
+        "summary-runs", help="List stored summary runs for one session"
+    )
+    summary_runs_parser.add_argument("session_id", type=int)
 
     subparsers.add_parser("doctor", help="Check local runtime prerequisites")
     return parser
@@ -230,14 +247,26 @@ def _summarize(args: argparse.Namespace, settings: Settings) -> int:
         progress=report_progress,
         final_progress=lambda: print("Creating final session summary..."),
     )
-    database.replace_summaries(
+    summary_run_id = database.store_summary_run(
         session_id=session.id,
         model_name=args.model,
+        chunk_seconds=args.chunk_seconds,
+        label=args.label,
         bundle=bundle,
     )
 
+    print(f"Summary run ID: {summary_run_id}")
     print(f"Stored {len(bundle.checkpoints)} structured checkpoints.")
     print(f"Summary processing time: {_format_timestamp(bundle.processing_seconds)}")
+    print(
+        "Final summary generation time: "
+        f"{_format_timestamp(bundle.final_generation_seconds)}"
+    )
+    print(f"Retry attempts: {bundle.retry_count}")
+    print(
+        "Retry processing time: "
+        f"{_format_timestamp(bundle.retry_processing_seconds)}"
+    )
     print("\nOverall summary")
     print(bundle.final_summary.overall_summary)
     return 0
@@ -250,27 +279,53 @@ def _summary(args: argparse.Namespace, settings: Settings) -> int:
     if session is None:
         raise LookupError(f"Session {args.session_id} was not found")
 
-    final_summary = database.get_final_summary(session.id)
+    final_summary = database.get_final_summary(session.id, args.run_id)
     if final_summary is None:
+        requested = f" run {args.run_id}" if args.run_id is not None else ""
         print(
-            f"Session {session.id} has no stored summary. "
+            f"Session {session.id} has no stored summary{requested}. "
             f"Run 'local-voice-agent summarize {session.id}' first."
         )
         return 1
 
-    checkpoints = database.get_summary_checkpoints(session.id)
+    checkpoints = database.get_summary_checkpoints(session.id, final_summary.id)
     print(f"Session {session.id} summary")
+    print(f"Summary run ID: {final_summary.id}")
+    if final_summary.label:
+        print(f"Label: {final_summary.label}")
     print(f"Model: {final_summary.model_name}")
+    if final_summary.chunk_seconds is not None:
+        print(f"Target chunk size: {_format_timestamp(final_summary.chunk_seconds)}")
     print(f"Checkpoints: {final_summary.checkpoint_count}")
     if final_summary.processing_seconds is not None:
         print(
             "Summary processing time: "
             f"{_format_timestamp(final_summary.processing_seconds)}"
         )
+    if final_summary.final_generation_seconds is not None:
+        print(
+            "Final summary generation time: "
+            f"{_format_timestamp(final_summary.final_generation_seconds)}"
+        )
+
+    all_attempts = [
+        checkpoint.attempt_seconds for checkpoint in checkpoints
+    ] + [final_summary.final_attempt_seconds]
+    retry_count = sum(max(0, len(attempts) - 1) for attempts in all_attempts)
+    retry_seconds = sum(sum(attempts[1:]) for attempts in all_attempts)
+    print(f"Retry attempts: {retry_count}")
+    print(f"Retry processing time: {_format_timestamp(retry_seconds)}")
+    _print_attempt_times("Final summary attempts", final_summary.final_attempt_seconds)
 
     print("\nOverall summary")
     print(final_summary.overall_summary)
     _print_string_list("Main topics", final_summary.main_topics)
+    _print_evidence_items("Key claims", final_summary.key_claims)
+    _print_key_concepts("Key concepts", final_summary.key_concepts)
+    _print_evidence_items(
+        "Uncertainties and debates", final_summary.uncertainties_and_debates
+    )
+    _print_terms_to_verify("Terms to verify", final_summary.terms_to_verify)
     _print_string_list("Decisions", final_summary.decisions)
     _print_action_items(final_summary)
     _print_string_list("Open questions", final_summary.open_questions)
@@ -285,7 +340,46 @@ def _summary(args: argparse.Namespace, settings: Settings) -> int:
             else ""
         )
         print(f"\n{checkpoint.chunk_index + 1}. [{start} - {end}]{duration}")
+        _print_attempt_times("Generation attempts", checkpoint.attempt_seconds)
         print(checkpoint.summary)
+        _print_evidence_items("Key claims", checkpoint.key_claims)
+        _print_key_concepts("Key concepts", checkpoint.key_concepts)
+        _print_evidence_items(
+            "Uncertainties and debates", checkpoint.uncertainties_and_debates
+        )
+        _print_terms_to_verify("Terms to verify", checkpoint.terms_to_verify)
+    return 0
+
+
+def _summary_runs(args: argparse.Namespace, settings: Settings) -> int:
+    database = _database(settings, args.database)
+    database.initialize()
+    session = database.get_session(args.session_id)
+    if session is None:
+        raise LookupError(f"Session {args.session_id} was not found")
+
+    runs = database.list_summary_runs(session.id)
+    if not runs:
+        print(f"Session {session.id} has no stored summary runs.")
+        return 0
+
+    print(f"Session {session.id} summary runs")
+    for run in runs:
+        processing = (
+            _format_timestamp(run.processing_seconds)
+            if run.processing_seconds is not None
+            else "--:--:--"
+        )
+        chunk = (
+            _format_timestamp(run.chunk_seconds)
+            if run.chunk_seconds is not None
+            else "unknown"
+        )
+        label = f"  label={run.label}" if run.label else ""
+        print(
+            f"{run.id:>4}  model={run.model_name:<14}  chunks={run.checkpoint_count:<3} "
+            f"target={chunk}  processing={processing}{label}"
+        )
     return 0
 
 
@@ -296,6 +390,54 @@ def _print_string_list(title: str, items: list[str]) -> None:
         return
     for item in items:
         print(f"- {item}")
+
+
+def _print_evidence_items(title: str, items: list[EvidenceItem]) -> None:
+    print(f"\n{title}")
+    if not items:
+        print("- None")
+        return
+    for item in items:
+        start = _format_timestamp(item.start_seconds)
+        end = _format_timestamp(item.end_seconds)
+        print(f"- [{start} - {end}] {item.text}")
+
+
+def _print_key_concepts(title: str, concepts: list[KeyConcept]) -> None:
+    print(f"\n{title}")
+    if not concepts:
+        print("- None")
+        return
+    for concept in concepts:
+        start = _format_timestamp(concept.start_seconds)
+        end = _format_timestamp(concept.end_seconds)
+        print(f"- [{start} - {end}] {concept.term}: {concept.explanation}")
+
+
+def _print_terms_to_verify(title: str, terms: list[TermToVerify]) -> None:
+    print(f"\n{title}")
+    if not terms:
+        print("- None")
+        return
+    for term in terms:
+        start = _format_timestamp(term.start_seconds)
+        end = _format_timestamp(term.end_seconds)
+        suggestion = (
+            f" -> suggested: {term.suggested_form}" if term.suggested_form else ""
+        )
+        print(
+            f"- [{start} - {end}] {term.transcript_form}{suggestion}; "
+            f"reason: {term.reason}"
+        )
+
+
+def _print_attempt_times(title: str, attempts: tuple[float, ...]) -> None:
+    if not attempts:
+        return
+    print(f"{title}:")
+    for index, seconds in enumerate(attempts):
+        label = "Attempt 1" if index == 0 else f"Retry {index}"
+        print(f"- {label}: {_format_timestamp(seconds)}")
 
 
 def _print_action_items(summary: StoredFinalSummary) -> None:
@@ -365,6 +507,7 @@ def main(argv: list[str] | None = None) -> int:
             "sessions": _sessions,
             "summarize": _summarize,
             "summary": _summary,
+            "summary-runs": _summary_runs,
             "doctor": _doctor,
         }
         return handlers[args.command](args, settings)

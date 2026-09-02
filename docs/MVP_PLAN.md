@@ -12,8 +12,10 @@ English audio file
     → CLI session listing and transcript display
     → approximately five-minute chunks
     → local Ollama structured checkpoint generation
+    → evidence-range validation and bounded correction retry
     → checkpoint-based final summary
-    → SQLite summary storage and CLI display
+    → append-only SQLite summary-run and attempt-timing storage
+    → CLI display
 ```
 
 The next slice begins with bounded transcript search, followed by the tool registry and manual agent loop.
@@ -38,7 +40,8 @@ Language detection, translation, Finnish support, and multiple prompt sets are e
 4. Group segments into approximately five-minute chunks without cutting transcript segments solely to hit an exact time boundary.
 5. Generate a Pydantic-validated checkpoint for each chunk.
 6. Generate a final structured summary from the checkpoints.
-7. Persist sessions, transcript segments, checkpoints, summaries, and later notes in SQLite.
+7. Persist sessions, transcript segments, versioned summary runs, checkpoints, and later notes
+   in SQLite.
 8. Let a user ask questions about one selected session.
 9. Let the local model select from explicitly registered and validated tools.
 10. Keep retrieved evidence bounded instead of sending the complete transcript for every question.
@@ -71,6 +74,9 @@ Acceptance criterion: one command processes a short audio file and the stored tr
 - Generate and validate checkpoints.
 - Generate the final summary from checkpoints.
 - Store source time ranges, model metadata, and outputs.
+- Reject empty outputs and timestamps outside the source checkpoint.
+- Record checkpoint, retry, final-summary, and total processing times.
+- Keep successful summary runs side by side with model, chunk-size, and optional label metadata.
 
 Acceptance criterion: a processed session has validated checkpoints and a final summary that can be read from SQLite.
 

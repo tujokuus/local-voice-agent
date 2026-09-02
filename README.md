@@ -53,6 +53,13 @@ Speaker diarization, realtime recording, GUIs, mobile clients, embeddings, and c
 - Record failed processing attempts without losing the error context.
 - Group complete transcript segments into approximately five-minute chunks.
 - Generate Pydantic-validated checkpoint and final-summary structures with Ollama.
+- Extract timestamped key claims, concepts, uncertainties or debates, and terms whose
+  transcription should be verified.
+- Reject out-of-range timestamps and empty checkpoint responses before they can be stored,
+  with one evidence-aware correction attempt.
+- Record total summary time, final-summary time, and individual retry times.
+- Preserve every successful summary as a separately identifiable run for model and
+  prompt comparisons.
 - Store and display checkpoint evidence ranges and final summaries in SQLite.
 
 Transcript search and the manual tool-calling agent loop are the next implementation slices.
@@ -103,13 +110,28 @@ Create approximately five-minute checkpoints and a final summary from an existin
 .\.venv\Scripts\python.exe -m local_voice_agent summary 2
 ```
 
-The default model is `qwen3.5:4b`. An installed alternative can be selected explicitly:
+The default model is `qwen3.5:4b`. To try the larger 9B model, download it once and
+then select it explicitly when summarizing:
 
 ```powershell
-.\.venv\Scripts\python.exe -m local_voice_agent summarize 2 --model qwen3.5:9b
+ollama pull qwen3.5:9b
+.\.venv\Scripts\python.exe -m local_voice_agent summarize 2 --model qwen3.5:9b `
+    --label "9b timestamp validation"
+.\.venv\Scripts\python.exe -m local_voice_agent summary 2
 ```
 
-Summarization reads the stored transcript and does not run Whisper again. A successful rerun atomically replaces the previous derived checkpoints and final summary for that session.
+Summarization reads the stored transcript and does not run Whisper again. Every successful
+run is appended to history; it no longer replaces an earlier summary. List the runs and open
+one specific result with:
+
+```powershell
+.\.venv\Scripts\python.exe -m local_voice_agent summary-runs 2
+.\.venv\Scripts\python.exe -m local_voice_agent summary 2 --run-id 3
+```
+
+Without `--run-id`, `summary` shows the newest successful run. Existing summaries are migrated
+to run history automatically.
+The database schema is upgraded automatically while preserving existing sessions and transcripts.
 
 The default database is `data/local_voice_agent.db`. Put `--database PATH` before the subcommand to use another database.
 
