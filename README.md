@@ -15,11 +15,11 @@ faster-whisper
        ↓
 timestamped transcript
        ↓
-approximately five-minute chunks
+approximately ten-minute, sentence-aware chunks
        ↓
 local Ollama model
        ↓
-structured checkpoints and final summary
+checkpoint summaries, important notes, topics, and overall summary
        ↓
 SQLite
        ↓
@@ -51,12 +51,11 @@ Speaker diarization, realtime recording, GUIs, mobile clients, embeddings, and c
 - List stored sessions.
 - Print a stored transcript with readable timestamps.
 - Record failed processing attempts without losing the error context.
-- Group complete transcript segments into approximately five-minute chunks.
-- Generate Pydantic-validated checkpoint and final-summary structures with Ollama.
-- Extract timestamped key claims, concepts, uncertainties or debates, and terms whose
-  transcription should be verified.
-- Reject out-of-range timestamps and empty checkpoint responses before they can be stored,
-  with one evidence-aware correction attempt.
+- Group transcript segments into approximately ten-minute chunks and prefer complete
+  sentence boundaries near each target.
+- Generate a short summary and important notes for every checkpoint with Ollama.
+- Combine checkpoints into an overall summary, important notes, and main topics.
+- Reject structurally invalid or empty note responses, with one correction attempt.
 - Record total summary time, final-summary time, and individual retry times.
 - Preserve every successful summary as a separately identifiable run for model and
   prompt comparisons.
@@ -103,10 +102,11 @@ List stored sessions and inspect one transcript:
 .\.venv\Scripts\python.exe -m local_voice_agent show 1
 ```
 
-Create approximately five-minute checkpoints and a final summary from an existing transcript:
+Create approximately ten-minute checkpoints and a final summary from an existing transcript:
 
 ```powershell
-.\.venv\Scripts\python.exe -m local_voice_agent summarize 2
+.\.venv\Scripts\python.exe -m local_voice_agent summarize 2 `
+    --content-mode informational
 .\.venv\Scripts\python.exe -m local_voice_agent summary 2
 ```
 
@@ -116,7 +116,7 @@ then select it explicitly when summarizing:
 ```powershell
 ollama pull qwen3.5:9b
 .\.venv\Scripts\python.exe -m local_voice_agent summarize 2 --model qwen3.5:9b `
-    --label "9b timestamp validation"
+    --content-mode informational --label "9b simple notes"
 .\.venv\Scripts\python.exe -m local_voice_agent summary 2
 ```
 
@@ -151,7 +151,7 @@ The defaults can be overridden with environment variables:
 | `LVA_OLLAMA_BASE_URL` | `http://127.0.0.1:11434` |
 | `LVA_OLLAMA_MODEL` | `qwen3.5:4b` |
 | `LVA_OLLAMA_TIMEOUT_SECONDS` | `600` |
-| `LVA_CHECKPOINT_TARGET_SECONDS` | `300` |
+| `LVA_CHECKPOINT_TARGET_SECONDS` | `600` |
 | `LVA_MINIMUM_FINAL_CHUNK_SECONDS` | `120` |
 
 The MVP intentionally supports only English even though the language is configurable for future development.
@@ -196,4 +196,6 @@ Use an English recording that you created yourself or that is clearly licensed f
 
 The first capability check was completed with OpenAI Whisper's small `tests/jfk.flac` fixture and the `tiny.en` model. The downloaded audio and runtime database live under ignored `data/` and are not committed.
 
-The summary slice was verified with a 15-minute English spoken article. It produced three checkpoints and a final summary with `qwen3.5:4b` while correctly leaving unsupported decisions, action items, and open questions empty.
+An earlier summary slice was verified with a 15-minute English spoken article. Current summaries
+deliberately use a smaller schema focused on useful notes; detailed claims, concepts, terminology
+checks, decisions, action items, and evidence linking are deferred to later development.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -31,6 +32,7 @@ class EvidenceItem(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     text: str = Field(min_length=1)
+    segment_ids: list[int] = Field(default_factory=list)
     start_seconds: float = Field(ge=0)
     end_seconds: float = Field(gt=0)
 
@@ -46,11 +48,33 @@ class EvidenceItem(BaseModel):
         return self
 
 
+class EvidenceReference(BaseModel):
+    """LLM-facing evidence that cites transcript rows instead of calculating time."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    text: str = Field(min_length=1)
+    segment_ids: list[int] = Field(min_length=1)
+
+    @field_validator("text")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("segment_ids")
+    @classmethod
+    def normalize_segment_ids(cls, values: list[int]) -> list[int]:
+        if any(value < 1 for value in values):
+            raise ValueError("segment_ids must contain positive database IDs")
+        return list(dict.fromkeys(values))
+
+
 class KeyConcept(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     term: str = Field(min_length=1)
     explanation: str = Field(min_length=1)
+    segment_ids: list[int] = Field(default_factory=list)
     start_seconds: float = Field(ge=0)
     end_seconds: float = Field(gt=0)
 
@@ -64,6 +88,26 @@ class KeyConcept(BaseModel):
         if self.end_seconds <= self.start_seconds:
             raise ValueError("end_seconds must be greater than start_seconds")
         return self
+
+
+class KeyConceptReference(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    term: str = Field(min_length=1)
+    explanation: str = Field(min_length=1)
+    segment_ids: list[int] = Field(min_length=1)
+
+    @field_validator("term", "explanation")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("segment_ids")
+    @classmethod
+    def normalize_segment_ids(cls, values: list[int]) -> list[int]:
+        if any(value < 1 for value in values):
+            raise ValueError("segment_ids must contain positive database IDs")
+        return list(dict.fromkeys(values))
 
 
 class TermToVerify(BaseModel):
@@ -101,28 +145,50 @@ class Checkpoint(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     summary: str = Field(min_length=1)
-    topics: list[str]
-    key_claims: list[EvidenceItem]
-    key_concepts: list[KeyConcept]
-    uncertainties_and_debates: list[EvidenceItem]
-    terms_to_verify: list[TermToVerify]
-    decisions: list[str]
-    action_items: list[ActionItem]
-    open_questions: list[str]
+    notes: list[str] = Field(default_factory=list)
+    topics: list[str] = Field(default_factory=list)
+    key_claims: list[EvidenceItem] = Field(default_factory=list)
+    key_concepts: list[KeyConcept] = Field(default_factory=list)
+    uncertainties_and_debates: list[EvidenceItem] = Field(default_factory=list)
+    terms_to_verify: list[TermToVerify] = Field(default_factory=list)
+    decisions: list[str] = Field(default_factory=list)
+    action_items: list[ActionItem] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+
+
+class CheckpointResponse(BaseModel):
+    """Small LLM-facing schema for one transcript chunk."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    summary: str = Field(min_length=1)
+    notes: list[str] = Field(min_length=1)
 
 
 class FinalSessionSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     overall_summary: str = Field(min_length=1)
-    main_topics: list[str]
-    key_claims: list[EvidenceItem]
-    key_concepts: list[KeyConcept]
-    uncertainties_and_debates: list[EvidenceItem]
-    terms_to_verify: list[TermToVerify]
-    decisions: list[str]
-    action_items: list[ActionItem]
-    open_questions: list[str]
+    important_notes: list[str] = Field(default_factory=list)
+    main_topics: list[str] = Field(default_factory=list)
+    key_claims: list[EvidenceItem] = Field(default_factory=list)
+    key_concepts: list[KeyConcept] = Field(default_factory=list)
+    uncertainties_and_debates: list[EvidenceItem] = Field(default_factory=list)
+    terms_to_verify: list[TermToVerify] = Field(default_factory=list)
+    decisions: list[str] = Field(default_factory=list)
+    action_items: list[ActionItem] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+
+
+class FinalSessionSummaryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    overall_summary: str = Field(min_length=1)
+    important_notes: list[str] = Field(min_length=1)
+    main_topics: list[str] = Field(min_length=1)
+
+
+ContentMode = Literal["auto", "informational", "meeting"]
 
 
 class GeneratedCheckpoint(BaseModel):
@@ -203,6 +269,7 @@ class StoredFinalSummary(FinalSessionSummary):
     label: str | None = None
     model_name: str
     chunk_seconds: float | None = None
+    content_mode: ContentMode = "auto"
     checkpoint_count: int
     processing_seconds: float | None = None
     final_generation_seconds: float | None = None
@@ -218,6 +285,7 @@ class StoredSummaryRun(BaseModel):
     label: str | None = None
     model_name: str
     chunk_seconds: float | None = None
+    content_mode: ContentMode = "auto"
     checkpoint_count: int
     processing_seconds: float | None = None
     final_generation_seconds: float | None = None

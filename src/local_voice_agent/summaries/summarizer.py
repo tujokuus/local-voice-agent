@@ -16,7 +16,10 @@ from local_voice_agent.models import StoredTranscriptSegment
 from local_voice_agent.summaries.chunking import chunk_transcript
 from local_voice_agent.summaries.models import (
     Checkpoint,
+    CheckpointResponse,
+    ContentMode,
     FinalSessionSummary,
+    FinalSessionSummaryResponse,
     GeneratedCheckpoint,
     GeneratedSummaryBundle,
 )
@@ -33,7 +36,6 @@ ProgressCallback = Callable[[int, int], None]
 FinalProgressCallback = Callable[[], None]
 ResponseValidator = Callable[[ResponseModel], None]
 
-_TIMESTAMP_TOLERANCE_SECONDS = 1.0
 _MISSING_CONTENT_PHRASES = (
     "no transcript",
     "transcript was not provided",
@@ -48,7 +50,7 @@ class SessionSummarizer:
         self,
         *,
         provider: LLMProvider,
-        target_chunk_seconds: float = 300,
+        target_chunk_seconds: float = 600,
         minimum_final_chunk_seconds: float = 120,
     ) -> None:
         self.provider = provider
@@ -59,6 +61,7 @@ class SessionSummarizer:
         self,
         segments: list[StoredTranscriptSegment],
         *,
+        content_mode: ContentMode = "auto",
         progress: ProgressCallback | None = None,
         final_progress: FinalProgressCallback | None = None,
     ) -> GeneratedSummaryBundle:
@@ -82,18 +85,20 @@ class SessionSummarizer:
                     ChatMessage(role="system", content=CHECKPOINT_SYSTEM_PROMPT),
                     ChatMessage(
                         role="user",
-                        content=checkpoint_user_prompt(chunk, previous_checkpoint),
+                        content=checkpoint_user_prompt(
+                            chunk, previous_checkpoint, content_mode
+                        ),
                     ),
                 ],
-                response_model=Checkpoint,
-                validator=lambda checkpoint, chunk=chunk: self._validate_structured_summary(
-                    checkpoint,
-                    evidence_start=chunk.start_seconds,
-                    evidence_end=chunk.end_seconds,
-                    label=f"checkpoint {chunk.index + 1}",
+                response_model=CheckpointResponse,
+                validator=lambda item, number=index: self._validate_checkpoint(
+                    item, number
                 ),
             )
-            checkpoint = response.data
+            checkpoint = Checkpoint(
+                summary=response.data.summary,
+                notes=response.data.notes,
+            )
             generated.append(
                 GeneratedCheckpoint(
                     chunk_index=chunk.index,
@@ -115,21 +120,21 @@ class SessionSummarizer:
                 ChatMessage(
                     role="user",
                     content=final_summary_user_prompt(
-                        [item.checkpoint for item in generated]
+                        [item.checkpoint for item in generated], content_mode
                     ),
                 ),
             ],
-            response_model=FinalSessionSummary,
-            validator=lambda summary: self._validate_structured_summary(
-                summary,
-                evidence_start=chunks[0].start_seconds,
-                evidence_end=chunks[-1].end_seconds,
-                label="final summary",
-            ),
+            response_model=FinalSessionSummaryResponse,
+            validator=self._validate_final_summary,
+        )
+        final_summary = FinalSessionSummary(
+            overall_summary=final_response.data.overall_summary,
+            important_notes=final_response.data.important_notes,
+            main_topics=final_response.data.main_topics,
         )
         return GeneratedSummaryBundle(
             checkpoints=tuple(generated),
-            final_summary=final_response.data,
+            final_summary=final_summary,
             final_raw_response=final_response.raw_content,
             final_generation_seconds=sum(final_attempt_seconds),
             final_attempt_seconds=final_attempt_seconds,
@@ -159,7 +164,7 @@ class SessionSummarizer:
                         validator(response.data)
                     except ValueError as exc:
                         raise StructuredOutputError(
-                            f"Context validation failed: {exc}",
+                            f"Content validation failed: {exc}",
                             raw_content=response.raw_content,
                         ) from exc
                 return response
@@ -178,9 +183,9 @@ class SessionSummarizer:
                     role="user",
                     content=(
                         "The previous response was rejected. The validation error was: "
-                        f"{first_error}. Return one corrected JSON object matching the required "
-                        "schema and transcript evidence exactly. Re-read the new transcript chunk, "
-                        "use absolute seconds, and do not repeat the rejected mistake."
+                        f"{first_error}. Return one corrected JSON object matching the "
+                        "required schema. Use only the supplied source content and make "
+                        "every required text field and list non-empty."
                     ),
                 ),
             ]
@@ -188,46 +193,25 @@ class SessionSummarizer:
             return response, tuple(attempt_seconds)
 
     @staticmethod
-    def _validate_structured_summary(
-        summary: Checkpoint | FinalSessionSummary,
-        *,
-        evidence_start: float,
-        evidence_end: float,
-        label: str,
-    ) -> None:
-        normalized_summary = (
-            summary.summary if isinstance(summary, Checkpoint) else summary.overall_summary
-        ).casefold()
-        if any(phrase in normalized_summary for phrase in _MISSING_CONTENT_PHRASES):
-            raise ValueError(f"{label} incorrectly claims that transcript content is missing")
-
-        has_substantive_content = any(
-            (
-                summary.key_claims,
-                summary.key_concepts,
-                summary.uncertainties_and_debates,
-                summary.decisions,
-                summary.action_items,
-                summary.open_questions,
-            )
+    def _validate_checkpoint(checkpoint: CheckpointResponse, number: int) -> None:
+        SessionSummarizer._reject_missing_content_claim(
+            checkpoint.summary, f"checkpoint {number}"
         )
-        if not has_substantive_content:
-            raise ValueError(f"{label} contains no substantive extracted items")
+        if not any(note.strip() for note in checkpoint.notes):
+            raise ValueError(f"checkpoint {number} has no useful notes")
 
-        timestamped_items = (
-            *summary.key_claims,
-            *summary.key_concepts,
-            *summary.uncertainties_and_debates,
-            *summary.terms_to_verify,
+    @staticmethod
+    def _validate_final_summary(summary: FinalSessionSummaryResponse) -> None:
+        SessionSummarizer._reject_missing_content_claim(
+            summary.overall_summary, "final summary"
         )
-        for item in timestamped_items:
-            if item.start_seconds < evidence_start - _TIMESTAMP_TOLERANCE_SECONDS:
-                raise ValueError(
-                    f"{label} timestamp {item.start_seconds:g} starts before its "
-                    f"evidence range {evidence_start:g}-{evidence_end:g} seconds"
-                )
-            if item.end_seconds > evidence_end + _TIMESTAMP_TOLERANCE_SECONDS:
-                raise ValueError(
-                    f"{label} timestamp {item.end_seconds:g} ends after its "
-                    f"evidence range {evidence_start:g}-{evidence_end:g} seconds"
-                )
+        if not any(note.strip() for note in summary.important_notes):
+            raise ValueError("final summary has no important notes")
+        if not any(topic.strip() for topic in summary.main_topics):
+            raise ValueError("final summary has no main topics")
+
+    @staticmethod
+    def _reject_missing_content_claim(text: str, label: str) -> None:
+        normalized = text.casefold()
+        if any(phrase in normalized for phrase in _MISSING_CONTENT_PHRASES):
+            raise ValueError(f"{label} incorrectly claims that source content is missing")

@@ -10,10 +10,10 @@ English audio file
     → validated timestamped segments
     → SQLite session and transcript storage
     → CLI session listing and transcript display
-    → approximately five-minute chunks
-    → local Ollama structured checkpoint generation
-    → evidence-range validation and bounded correction retry
-    → checkpoint-based final summary
+    → approximately ten-minute sentence-aware chunks
+    → local Ollama checkpoint summaries and notes
+    → bounded structured-output correction retry
+    → overall summary, important notes, and main topics
     → append-only SQLite summary-run and attempt-timing storage
     → CLI display
 ```
@@ -37,9 +37,10 @@ Language detection, translation, Finnish support, and multiple prompt sets are e
 1. Accept a local WAV, MP3, or other supported audio file.
 2. Transcribe English speech locally with `faster-whisper`.
 3. Store timestamped transcript segments.
-4. Group segments into approximately five-minute chunks without cutting transcript segments solely to hit an exact time boundary.
+4. Group segments into approximately ten-minute chunks, preferring a nearby sentence ending
+   instead of cutting solely at an exact time.
 5. Generate a Pydantic-validated checkpoint for each chunk.
-6. Generate a final structured summary from the checkpoints.
+6. Generate an overall summary, important notes, and main topics from the checkpoints.
 7. Persist sessions, transcript segments, versioned summary runs, checkpoints, and later notes
    in SQLite.
 8. Let a user ask questions about one selected session.
@@ -69,12 +70,11 @@ Acceptance criterion: one command processes a short audio file and the stored tr
 
 ### Slice 2: transcript to summaries
 
-- Group timestamped segments into approximate five-minute chunks.
-- Define structured checkpoint and final-summary models.
-- Generate and validate checkpoints.
-- Generate the final summary from checkpoints.
+- Group timestamped segments into approximate ten-minute sentence-aware chunks.
+- Generate a short summary and important-note list for every checkpoint.
+- Generate the overall summary, important notes, and main topics from checkpoints.
 - Store source time ranges, model metadata, and outputs.
-- Reject empty outputs and timestamps outside the source checkpoint.
+- Reject structurally invalid and empty outputs.
 - Record checkpoint, retry, final-summary, and total processing times.
 - Keep successful summary runs side by side with model, chunk-size, and optional label metadata.
 
@@ -104,11 +104,15 @@ Acceptance criterion: the CLI agent answers a question using retrieved transcrip
 - Add `save_note` with explicit user intent or confirmation because it changes stored state.
 - Add focused automated tests and a real-model smoke-test guide.
 
-## Structured summaries
+## Summary scope
 
-Each checkpoint should distinguish discussion, decisions, proposed actions, actual action items, and unresolved questions. It must not invent decisions or owners that the transcript does not support.
+Each checkpoint currently contains only a short summary and a list of useful notes. The final stage
+combines those into an overall summary, important notes, and main topics. Detailed claims, concepts,
+terminology verification, decisions, action items, and evidence linking are deliberately deferred
+until the simpler notes pipeline is reliable.
 
-Every checkpoint should retain its source start and end timestamps. The final summary should be produced primarily from checkpoints rather than reprocessing the full transcript.
+Every checkpoint retains its source start and end timestamps. The final summary is produced from
+checkpoints rather than reprocessing the full transcript.
 
 ## Storage guidance
 

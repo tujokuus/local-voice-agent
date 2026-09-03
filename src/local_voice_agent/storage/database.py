@@ -13,6 +13,7 @@ from local_voice_agent.models import (
     TranscriptionResult,
 )
 from local_voice_agent.summaries.models import (
+    ContentMode,
     GeneratedCheckpoint,
     GeneratedSummaryBundle,
     StoredFinalSummary,
@@ -21,7 +22,7 @@ from local_voice_agent.summaries.models import (
 )
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 7
 
 
 class Database:
@@ -82,6 +83,7 @@ class Database:
                     start_seconds REAL NOT NULL CHECK (start_seconds >= 0),
                     end_seconds REAL NOT NULL CHECK (end_seconds > start_seconds),
                     summary TEXT NOT NULL CHECK (length(trim(summary)) > 0),
+                    notes_json TEXT NOT NULL DEFAULT '[]',
                     topics_json TEXT NOT NULL,
                     key_claims_json TEXT NOT NULL DEFAULT '[]',
                     key_concepts_json TEXT NOT NULL DEFAULT '[]',
@@ -105,6 +107,7 @@ class Database:
                     session_id INTEGER NOT NULL UNIQUE
                         REFERENCES sessions(id) ON DELETE CASCADE,
                     overall_summary TEXT NOT NULL CHECK (length(trim(overall_summary)) > 0),
+                    important_notes_json TEXT NOT NULL DEFAULT '[]',
                     main_topics_json TEXT NOT NULL,
                     key_claims_json TEXT NOT NULL DEFAULT '[]',
                     key_concepts_json TEXT NOT NULL DEFAULT '[]',
@@ -135,7 +138,10 @@ class Database:
                     label TEXT,
                     model_name TEXT NOT NULL,
                     chunk_seconds REAL CHECK (chunk_seconds IS NULL OR chunk_seconds > 0),
+                    content_mode TEXT NOT NULL DEFAULT 'auto'
+                        CHECK (content_mode IN ('auto', 'informational', 'meeting')),
                     overall_summary TEXT NOT NULL CHECK (length(trim(overall_summary)) > 0),
+                    important_notes_json TEXT NOT NULL DEFAULT '[]',
                     main_topics_json TEXT NOT NULL,
                     key_claims_json TEXT NOT NULL DEFAULT '[]',
                     key_concepts_json TEXT NOT NULL DEFAULT '[]',
@@ -168,6 +174,7 @@ class Database:
                     start_seconds REAL NOT NULL CHECK (start_seconds >= 0),
                     end_seconds REAL NOT NULL CHECK (end_seconds > start_seconds),
                     summary TEXT NOT NULL CHECK (length(trim(summary)) > 0),
+                    notes_json TEXT NOT NULL DEFAULT '[]',
                     topics_json TEXT NOT NULL,
                     key_claims_json TEXT NOT NULL DEFAULT '[]',
                     key_concepts_json TEXT NOT NULL DEFAULT '[]',
@@ -192,6 +199,9 @@ class Database:
                 """
             )
             self._add_json_column_if_missing(
+                connection, "summary_checkpoints", "notes_json"
+            )
+            self._add_json_column_if_missing(
                 connection, "summary_checkpoints", "key_claims_json"
             )
             self._add_json_column_if_missing(
@@ -205,6 +215,9 @@ class Database:
             )
             self._add_json_column_if_missing(
                 connection, "summary_checkpoints", "attempt_seconds_json"
+            )
+            self._add_json_column_if_missing(
+                connection, "final_summaries", "important_notes_json"
             )
             self._add_json_column_if_missing(
                 connection, "final_summaries", "key_claims_json"
@@ -227,6 +240,19 @@ class Database:
             )
             self._add_json_column_if_missing(
                 connection, "final_summaries", "final_attempt_seconds_json"
+            )
+            self._add_column_if_missing(
+                connection,
+                "summary_runs",
+                "content_mode",
+                "TEXT NOT NULL DEFAULT 'auto' "
+                "CHECK (content_mode IN ('auto', 'informational', 'meeting'))",
+            )
+            self._add_json_column_if_missing(
+                connection, "summary_runs", "important_notes_json"
+            )
+            self._add_json_column_if_missing(
+                connection, "summary_run_checkpoints", "notes_json"
             )
             self._migrate_legacy_summaries(connection)
             connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -343,6 +369,7 @@ class Database:
         session_id: int,
         model_name: str,
         chunk_seconds: float,
+        content_mode: ContentMode,
         label: str | None,
         bundle: GeneratedSummaryBundle,
     ) -> int:
@@ -363,20 +390,23 @@ class Database:
             cursor = connection.execute(
                 """
                 INSERT INTO summary_runs (
-                    session_id, label, model_name, chunk_seconds, overall_summary,
+                    session_id, label, model_name, chunk_seconds, content_mode,
+                    overall_summary, important_notes_json,
                     main_topics_json, key_claims_json, key_concepts_json,
                     uncertainties_json, terms_to_verify_json, decisions_json,
                     action_items_json, open_questions_json, checkpoint_count,
                     raw_response, processing_seconds, final_generation_seconds,
                     final_attempt_seconds_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
                     self._normalize_label(label),
                     model_name,
                     chunk_seconds,
+                    content_mode,
                     final.overall_summary,
+                    self._json(final.important_notes),
                     self._json(final.main_topics),
                     self._json([claim.model_dump() for claim in final.key_claims]),
                     self._json([concept.model_dump() for concept in final.key_concepts]),
@@ -400,11 +430,11 @@ class Database:
                 """
                 INSERT INTO summary_run_checkpoints (
                     summary_run_id, chunk_index, start_seconds, end_seconds, summary,
-                    topics_json, key_claims_json, key_concepts_json,
+                    notes_json, topics_json, key_claims_json, key_concepts_json,
                     uncertainties_json, terms_to_verify_json, decisions_json,
                     action_items_json, open_questions_json, raw_response,
                     generation_seconds, attempt_seconds_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     self._checkpoint_values(summary_run_id, item)
@@ -443,6 +473,7 @@ class Database:
                 start_seconds=row["start_seconds"],
                 end_seconds=row["end_seconds"],
                 summary=row["summary"],
+                notes=json.loads(row["notes_json"]),
                 topics=json.loads(row["topics_json"]),
                 key_claims=json.loads(row["key_claims_json"]),
                 key_concepts=json.loads(row["key_concepts_json"]),
@@ -489,6 +520,7 @@ class Database:
             session_id=row["session_id"],
             label=row["label"],
             overall_summary=row["overall_summary"],
+            important_notes=json.loads(row["important_notes_json"]),
             main_topics=json.loads(row["main_topics_json"]),
             key_claims=json.loads(row["key_claims_json"]),
             key_concepts=json.loads(row["key_concepts_json"]),
@@ -499,6 +531,7 @@ class Database:
             open_questions=json.loads(row["open_questions_json"]),
             model_name=row["model_name"],
             chunk_seconds=row["chunk_seconds"],
+            content_mode=row["content_mode"],
             checkpoint_count=row["checkpoint_count"],
             processing_seconds=row["processing_seconds"],
             final_generation_seconds=row["final_generation_seconds"],
@@ -510,7 +543,7 @@ class Database:
         with self.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT id, session_id, label, model_name, chunk_seconds,
+                SELECT id, session_id, label, model_name, chunk_seconds, content_mode,
                        checkpoint_count, processing_seconds,
                        final_generation_seconds, created_at
                 FROM summary_runs
@@ -532,6 +565,7 @@ class Database:
             item.start_seconds,
             item.end_seconds,
             checkpoint.summary,
+            cls._json(checkpoint.notes),
             cls._json(checkpoint.topics),
             cls._json([claim.model_dump() for claim in checkpoint.key_claims]),
             cls._json([concept.model_dump() for concept in checkpoint.key_concepts]),
@@ -595,20 +629,23 @@ class Database:
             cursor = connection.execute(
                 """
                 INSERT INTO summary_runs (
-                    session_id, label, model_name, chunk_seconds, overall_summary,
+                    session_id, label, model_name, chunk_seconds, content_mode,
+                    overall_summary, important_notes_json,
                     main_topics_json, key_claims_json, key_concepts_json,
                     uncertainties_json, terms_to_verify_json, decisions_json,
                     action_items_json, open_questions_json, checkpoint_count,
                     raw_response, processing_seconds, final_generation_seconds,
                     final_attempt_seconds_json, legacy_final_summary_id, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     final["session_id"],
                     "migrated-legacy-summary",
                     final["model_name"],
                     None,
+                    "auto",
                     final["overall_summary"],
+                    final["important_notes_json"],
                     final["main_topics_json"],
                     final["key_claims_json"],
                     final["key_concepts_json"],
@@ -639,11 +676,11 @@ class Database:
                 """
                 INSERT INTO summary_run_checkpoints (
                     summary_run_id, chunk_index, start_seconds, end_seconds, summary,
-                    topics_json, key_claims_json, key_concepts_json,
+                    notes_json, topics_json, key_claims_json, key_concepts_json,
                     uncertainties_json, terms_to_verify_json, decisions_json,
                     action_items_json, open_questions_json, raw_response,
                     generation_seconds, attempt_seconds_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -652,6 +689,7 @@ class Database:
                         checkpoint["start_seconds"],
                         checkpoint["end_seconds"],
                         checkpoint["summary"],
+                        checkpoint["notes_json"],
                         checkpoint["topics_json"],
                         checkpoint["key_claims_json"],
                         checkpoint["key_concepts_json"],
