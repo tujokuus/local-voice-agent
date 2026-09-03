@@ -17,10 +17,10 @@ English audio file
     → append-only SQLite summary-run and attempt-timing storage
     → CLI display
     → bounded relevance-ranked transcript search
+    → bounded transcript range retrieval
 ```
 
-The next slice continues with transcript range retrieval, followed by the tool registry and manual
-agent loop.
+The next slice continues with the tool registry and manual agent loop.
 
 ## Goal
 
@@ -85,7 +85,7 @@ Acceptance criterion: a processed session has validated checkpoints and a final 
 ### Slice 3: evidence-based session chat
 
 - Implement bounded transcript search. Completed for direct CLI use.
-- Implement transcript range retrieval.
+- Implement transcript range retrieval. Completed for direct CLI use.
 - Expose the session summary.
 - Implement a small tool registry and argument validation.
 - Implement the manual agent loop with a maximum step count.

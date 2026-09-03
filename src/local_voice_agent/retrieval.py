@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -9,6 +10,7 @@ from local_voice_agent.models import StoredTranscriptSegment
 
 
 MAX_SEARCH_RESULTS = 20
+MAX_TRANSCRIPT_RANGE_SECONDS = 600
 _WORD_PATTERN = re.compile(r"[^\W_]+(?:['’-][^\W_]+)*", re.UNICODE)
 
 
@@ -71,6 +73,79 @@ def search_transcript(
 
     results.sort(key=lambda item: (-item.score, item.start_seconds, item.segment_id))
     return results[:limit]
+
+
+def get_transcript_range(
+    segments: Sequence[StoredTranscriptSegment],
+    *,
+    start_seconds: float,
+    end_seconds: float,
+    maximum_duration_seconds: float = MAX_TRANSCRIPT_RANGE_SECONDS,
+) -> list[StoredTranscriptSegment]:
+    """Return chronological segments overlapping one bounded time range."""
+
+    if not math.isfinite(start_seconds) or start_seconds < 0:
+        raise ValueError("range start cannot be negative")
+    if not math.isfinite(end_seconds) or end_seconds <= start_seconds:
+        raise ValueError("range end must be greater than its start")
+    if not math.isfinite(maximum_duration_seconds) or maximum_duration_seconds <= 0:
+        raise ValueError("maximum range duration must be greater than zero")
+    if end_seconds - start_seconds > maximum_duration_seconds:
+        raise ValueError(
+            "requested range is too long; maximum duration is "
+            f"{maximum_duration_seconds:g} seconds"
+        )
+
+    return sorted(
+        (
+            segment
+            for segment in segments
+            if segment.start_seconds < end_seconds
+            and segment.end_seconds > start_seconds
+        ),
+        key=lambda segment: (segment.start_seconds, segment.index),
+    )
+
+
+def parse_time_value(value: str) -> float:
+    """Parse seconds, MM:SS, or HH:MM:SS into seconds."""
+
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("time value cannot be empty")
+
+    parts = normalized.split(":")
+    if len(parts) == 1:
+        try:
+            seconds = float(parts[0])
+        except ValueError as exc:
+            raise ValueError(f"invalid time value: {value}") from exc
+        if not math.isfinite(seconds) or seconds < 0:
+            raise ValueError("time value cannot be negative")
+        return seconds
+
+    if len(parts) not in (2, 3):
+        raise ValueError(f"invalid time value: {value}")
+    try:
+        leading_parts = [int(part) for part in parts[:-1]]
+        seconds = float(parts[-1])
+    except ValueError as exc:
+        raise ValueError(f"invalid time value: {value}") from exc
+
+    if (
+        any(part < 0 for part in leading_parts)
+        or not math.isfinite(seconds)
+        or not 0 <= seconds < 60
+    ):
+        raise ValueError(f"invalid time value: {value}")
+    if len(parts) == 2:
+        minutes = leading_parts[0]
+        return minutes * 60 + seconds
+
+    hours, minutes = leading_parts
+    if minutes >= 60:
+        raise ValueError(f"invalid time value: {value}")
+    return hours * 3600 + minutes * 60 + seconds
 
 
 def _tokenize(text: str) -> list[str]:

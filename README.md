@@ -113,6 +113,15 @@ Search a stored transcript. Quotation marks keep a multi-word query as one argum
 Search is local and deterministic: it does not call Whisper or Ollama. Exact phrases rank above
 partial term matches, and `--limit` is restricted to 1–20 results.
 
+Read a specific transcript interval using seconds, `MM:SS`, or `HH:MM:SS`:
+
+```powershell
+.\.venv\Scripts\python.exe -m local_voice_agent transcript-range 2 08:00 10:00
+```
+
+One request is limited to ten minutes. Segments that overlap either boundary are included so words
+are not cut off at the requested timestamps.
+
 Create approximately ten-minute checkpoints and a final summary from an existing transcript:
 
 ```powershell
@@ -143,6 +152,14 @@ one specific result with:
 Without `--run-id`, `summary` shows the newest successful run. Existing summaries are migrated
 to run history automatically.
 The database schema is upgraded automatically while preserving existing sessions and transcripts.
+
+List every important note and checkpoint note stored in all successful summary runs:
+
+```powershell
+.\.venv\Scripts\python.exe -m local_voice_agent notes
+.\.venv\Scripts\python.exe -m local_voice_agent notes --session-id 2
+.\.venv\Scripts\python.exe -m local_voice_agent notes --session-id 2 --run-id 3
+```
 
 The default database is `data/local_voice_agent.db`. Put `--database PATH` before the subcommand to use another database.
 

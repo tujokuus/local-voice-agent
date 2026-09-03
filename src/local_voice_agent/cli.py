@@ -10,7 +10,12 @@ from pathlib import Path
 from local_voice_agent.config import Settings
 from local_voice_agent.llm import OllamaProvider
 from local_voice_agent.models import SessionStatus
-from local_voice_agent.retrieval import MAX_SEARCH_RESULTS, search_transcript
+from local_voice_agent.retrieval import (
+    MAX_SEARCH_RESULTS,
+    get_transcript_range,
+    parse_time_value,
+    search_transcript,
+)
 from local_voice_agent.service import SessionProcessor
 from local_voice_agent.storage import Database
 from local_voice_agent.summaries import SessionSummarizer
@@ -72,6 +77,23 @@ def _build_parser(settings: Settings) -> argparse.ArgumentParser:
         type=int,
         default=5,
         help=f"Maximum results, between 1 and {MAX_SEARCH_RESULTS} (default: 5)",
+    )
+
+    range_parser = subparsers.add_parser(
+        "transcript-range", help="Show transcript text from a bounded time range"
+    )
+    range_parser.add_argument("session_id", type=int)
+    range_parser.add_argument("start", help="Start as seconds, MM:SS, or HH:MM:SS")
+    range_parser.add_argument("end", help="End as seconds, MM:SS, or HH:MM:SS")
+
+    notes_parser = subparsers.add_parser(
+        "notes", help="List notes stored in successful summary runs"
+    )
+    notes_parser.add_argument(
+        "--session-id", type=int, help="Limit output to one session"
+    )
+    notes_parser.add_argument(
+        "--run-id", type=int, help="Limit output to one run; requires --session-id"
     )
 
     summarize_parser = subparsers.add_parser(
@@ -242,6 +264,90 @@ def _search(args: argparse.Namespace, settings: Settings) -> int:
             f"matched={terms}"
         )
         print(result.text)
+    return 0
+
+
+def _transcript_range(args: argparse.Namespace, settings: Settings) -> int:
+    database = _database(settings, args.database)
+    database.initialize()
+    session = database.get_session(args.session_id)
+    if session is None:
+        raise LookupError(f"Session {args.session_id} was not found")
+
+    start_seconds = parse_time_value(args.start)
+    end_seconds = parse_time_value(args.end)
+    segments = get_transcript_range(
+        database.get_transcript(session.id),
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+    )
+
+    start = _format_timestamp(start_seconds)
+    end = _format_timestamp(end_seconds)
+    print(f"Session {session.id} transcript range [{start} - {end}]")
+    if not segments:
+        print("No transcript segments overlap this range.")
+        return 0
+
+    for segment in segments:
+        segment_start = _format_timestamp(segment.start_seconds)
+        segment_end = _format_timestamp(segment.end_seconds)
+        print(
+            f"[{segment_start} - {segment_end}] "
+            f"segment_id={segment.id} {segment.text}"
+        )
+    return 0
+
+
+def _notes(args: argparse.Namespace, settings: Settings) -> int:
+    if args.run_id is not None and args.session_id is None:
+        raise ValueError("--run-id requires --session-id")
+
+    database = _database(settings, args.database)
+    database.initialize()
+    if args.session_id is not None:
+        session = database.get_session(args.session_id)
+        if session is None:
+            raise LookupError(f"Session {args.session_id} was not found")
+        sessions = [session]
+    else:
+        sessions = database.list_sessions()
+
+    printed_runs = 0
+    for session in sessions:
+        runs = database.list_summary_runs(session.id)
+        if args.run_id is not None:
+            runs = [run for run in runs if run.id == args.run_id]
+            if not runs:
+                raise LookupError(
+                    f"Summary run {args.run_id} was not found for session {session.id}"
+                )
+
+        for run in runs:
+            summary = database.get_final_summary(session.id, run.id)
+            if summary is None:
+                continue
+            checkpoints = database.get_summary_checkpoints(session.id, run.id)
+            checkpoint_notes = [
+                (checkpoint, note)
+                for checkpoint in checkpoints
+                for note in checkpoint.notes
+            ]
+            if not summary.important_notes and not checkpoint_notes:
+                continue
+
+            printed_runs += 1
+            label = f"; label={run.label}" if run.label else ""
+            print(f"\nSession {session.id}, summary run {run.id}{label}")
+            _print_string_list("Important notes", summary.important_notes)
+            print("\nCheckpoint notes")
+            for checkpoint, note in checkpoint_notes:
+                start = _format_timestamp(checkpoint.start_seconds)
+                end = _format_timestamp(checkpoint.end_seconds)
+                print(f"- [{start} - {end}] {note}")
+
+    if printed_runs == 0:
+        print("No stored notes found.")
     return 0
 
 
@@ -492,6 +598,8 @@ def main(argv: list[str] | None = None) -> int:
             "show": _show,
             "sessions": _sessions,
             "search": _search,
+            "transcript-range": _transcript_range,
+            "notes": _notes,
             "summarize": _summarize,
             "summary": _summary,
             "summary-runs": _summary_runs,
