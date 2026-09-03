@@ -10,6 +10,7 @@ from pathlib import Path
 from local_voice_agent.config import Settings
 from local_voice_agent.llm import OllamaProvider
 from local_voice_agent.models import SessionStatus
+from local_voice_agent.retrieval import MAX_SEARCH_RESULTS, search_transcript
 from local_voice_agent.service import SessionProcessor
 from local_voice_agent.storage import Database
 from local_voice_agent.summaries import SessionSummarizer
@@ -60,6 +61,18 @@ def _build_parser(settings: Settings) -> argparse.ArgumentParser:
     show_parser.add_argument("session_id", type=int)
 
     subparsers.add_parser("sessions", help="List stored sessions")
+
+    search_parser = subparsers.add_parser(
+        "search", help="Search one stored session transcript"
+    )
+    search_parser.add_argument("session_id", type=int)
+    search_parser.add_argument("query", help="Word or quoted phrase to find")
+    search_parser.add_argument(
+        "--limit",
+        type=int,
+        default=5,
+        help=f"Maximum results, between 1 and {MAX_SEARCH_RESULTS} (default: 5)",
+    )
 
     summarize_parser = subparsers.add_parser(
         "summarize", help="Create checkpoint notes and a final summary"
@@ -200,6 +213,35 @@ def _sessions(args: argparse.Namespace, settings: Settings) -> int:
             f"audio={audio_duration}  processing={processing_duration}  "
             f"{session.source_audio_path.name}"
         )
+    return 0
+
+
+def _search(args: argparse.Namespace, settings: Settings) -> int:
+    database = _database(settings, args.database)
+    database.initialize()
+    session = database.get_session(args.session_id)
+    if session is None:
+        raise LookupError(f"Session {args.session_id} was not found")
+
+    results = search_transcript(
+        database.get_transcript(session.id),
+        args.query,
+        limit=args.limit,
+    )
+    print(f'Search results for "{args.query.strip()}" in session {session.id}')
+    if not results:
+        print("No transcript matches found.")
+        return 0
+
+    for index, result in enumerate(results, start=1):
+        start = _format_timestamp(result.start_seconds)
+        end = _format_timestamp(result.end_seconds)
+        terms = ", ".join(result.matched_terms)
+        print(
+            f"\n{index}. [{start} - {end}] segment_id={result.segment_id} "
+            f"matched={terms}"
+        )
+        print(result.text)
     return 0
 
 
@@ -449,6 +491,7 @@ def main(argv: list[str] | None = None) -> int:
             "process": _process,
             "show": _show,
             "sessions": _sessions,
+            "search": _search,
             "summarize": _summarize,
             "summary": _summary,
             "summary-runs": _summary_runs,

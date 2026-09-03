@@ -50,6 +50,7 @@ Speaker diarization, realtime recording, GUIs, mobile clients, embeddings, and c
 - Display both audio duration and elapsed processing time for completed sessions.
 - List stored sessions.
 - Print a stored transcript with readable timestamps.
+- Search a stored transcript with bounded, relevance-ranked results.
 - Record failed processing attempts without losing the error context.
 - Group transcript segments into approximately ten-minute chunks and prefer complete
   sentence boundaries near each target.
@@ -101,6 +102,16 @@ List stored sessions and inspect one transcript:
 .\.venv\Scripts\python.exe -m local_voice_agent sessions
 .\.venv\Scripts\python.exe -m local_voice_agent show 1
 ```
+
+Search a stored transcript. Quotation marks keep a multi-word query as one argument:
+
+```powershell
+.\.venv\Scripts\python.exe -m local_voice_agent search 2 "oral history"
+.\.venv\Scripts\python.exe -m local_voice_agent search 2 "poetry" --limit 10
+```
+
+Search is local and deterministic: it does not call Whisper or Ollama. Exact phrases rank above
+partial term matches, and `--limit` is restricted to 1–20 results.
 
 Create approximately ten-minute checkpoints and a final summary from an existing transcript:
 
