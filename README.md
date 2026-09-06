@@ -62,7 +62,8 @@ Speaker diarization, realtime recording, GUIs, mobile clients, embeddings, and c
   prompt comparisons.
 - Store and display checkpoint evidence ranges and final summaries in SQLite.
 
-Transcript search and the manual tool-calling agent loop are the next implementation slices.
+Transcript search, range retrieval, and the first read-only question-answering agent loop are now
+available. Retrieval-quality evaluation and agent hardening are the next implementation slices.
 
 ## Setup
 
@@ -160,6 +161,38 @@ List every important note and checkpoint note stored in all successful summary r
 .\.venv\Scripts\python.exe -m local_voice_agent notes --session-id 2
 .\.venv\Scripts\python.exe -m local_voice_agent notes --session-id 2 --run-id 3
 ```
+
+Ask a question about one stored recording:
+
+```powershell
+.\.venv\Scripts\python.exe -m local_voice_agent ask 2 `
+    "How did writing change poetry?" --model qwen3.5:4b
+```
+
+Inspect the model's selected actions while developing:
+
+```powershell
+.\.venv\Scripts\python.exe -m local_voice_agent ask 2 `
+    "How did writing change poetry?" --model qwen3.5:4b --debug
+```
+
+The agent has only three read-only tools: bounded transcript search, bounded transcript range
+retrieval, and the selected session's stored summary. A supported factual answer requires both a
+search and inspection of a relevant transcript range. The loop has a fixed step limit, and answers
+must copy timestamp citations returned by a tool.
+
+For range inspection, the model must select a `segment_id` returned by search. The application—not
+the model—then reads 30 seconds on both sides of that segment. Invalid selections receive at most
+two bounded repair attempts. Transcript search expands common English word forms and synonyms, and
+the stored session summary supplies related vocabulary for ranking search results. The summary is
+planning context only; final claims must still be verified from transcript segments.
+
+After each retrieved passage, the agent checks whether it directly answers the original question.
+It can make one different follow-up search when the first passage is irrelevant or incomplete, and
+it cannot declare evidence insufficient until both searches have been tried. Rejected final answers
+have a separate three-repair allowance and do not consume the configured valid-step budget. With
+`--debug`, the rejection reason is printed. The original question is repeated after every tool
+result to reduce topic drift.
 
 The default database is `data/local_voice_agent.db`. Put `--database PATH` before the subcommand to use another database.
 

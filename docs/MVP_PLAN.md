@@ -18,9 +18,10 @@ English audio file
     → CLI display
     → bounded relevance-ranked transcript search
     → bounded transcript range retrieval
+    → bounded read-only question-answering agent loop
 ```
 
-The next slice continues with the tool registry and manual agent loop.
+The next slice hardens retrieval quality and evaluates the agent with real questions.
 
 ## Goal
 
@@ -84,20 +85,29 @@ Acceptance criterion: a processed session has validated checkpoints and a final 
 
 ### Slice 3: evidence-based session chat
 
-- Implement bounded transcript search. Completed for direct CLI use.
+- Implement bounded transcript search with word-form and synonym expansion. Completed.
 - Implement transcript range retrieval. Completed for direct CLI use.
-- Expose the session summary.
-- Implement a small tool registry and argument validation.
-- Implement the manual agent loop with a maximum step count.
+- Expose the session summary and use relevant excerpts as search-planning context. Completed.
+- Implement a small tool registry and argument validation. Completed for `ask`.
+- Implement the manual agent loop with a maximum step count. Completed for `ask`.
 - Keep the selected session ID in trusted application context rather than accepting it from the model.
+- Allow a different second search when the first inspected passage is insufficient. Completed.
+- Keep rejected-answer repairs outside the valid-step budget and show rejection reasons in debug
+  output. Completed.
 
 Initial read-only tools:
 
 - `search_transcript(query)`
-- `get_transcript(start_seconds, end_seconds)`
+- `get_transcript(segment_id)`
 - `get_session_summary()`
 
 Acceptance criterion: the CLI agent answers a question using retrieved transcript evidence and includes relevant timestamps when available.
+
+The agent's transcript-range tool is tied to a segment returned by its preceding search. Application
+code expands that segment by 30 seconds on both sides, preventing the model from requesting an
+arbitrary full-recording range. The original question is retained in every tool-result turn. The
+stored summary can guide search vocabulary, but transcript evidence remains mandatory for a
+supported answer.
 
 ### Slice 4: hardening and learning features
 

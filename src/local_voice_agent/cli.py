@@ -6,7 +6,9 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from time import perf_counter
 
+from local_voice_agent.agent import MAX_AGENT_STEPS, SessionQuestionAgent
 from local_voice_agent.config import Settings
 from local_voice_agent.llm import OllamaProvider
 from local_voice_agent.models import SessionStatus
@@ -94,6 +96,29 @@ def _build_parser(settings: Settings) -> argparse.ArgumentParser:
     )
     notes_parser.add_argument(
         "--run-id", type=int, help="Limit output to one run; requires --session-id"
+    )
+
+    ask_parser = subparsers.add_parser(
+        "ask", help="Answer a question using bounded read-only transcript tools"
+    )
+    ask_parser.add_argument("session_id", type=int)
+    ask_parser.add_argument("question", help="Question about the selected recording")
+    ask_parser.add_argument("--model", default=settings.ollama_model)
+    ask_parser.add_argument("--ollama-url", default=settings.ollama_base_url)
+    ask_parser.add_argument(
+        "--timeout", type=float, default=settings.ollama_timeout_seconds
+    )
+    ask_parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=5,
+        help=f"Maximum agent steps, between 1 and {MAX_AGENT_STEPS} (default: 5)",
+    )
+    ask_parser.add_argument(
+        "--run-id", type=int, help="Use a specific stored summary run"
+    )
+    ask_parser.add_argument(
+        "--debug", action="store_true", help="Print the agent's selected actions"
     )
 
     summarize_parser = subparsers.add_parser(
@@ -351,6 +376,55 @@ def _notes(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def _ask(args: argparse.Namespace, settings: Settings) -> int:
+    if args.timeout <= 0:
+        raise ValueError("--timeout must be greater than zero")
+
+    database = _database(settings, args.database)
+    database.initialize()
+    session = database.get_session(args.session_id)
+    if session is None:
+        raise LookupError(f"Session {args.session_id} was not found")
+
+    transcript = database.get_transcript(session.id)
+    summary = database.get_final_summary(session.id, args.run_id)
+    if args.run_id is not None and summary is None:
+        raise LookupError(
+            f"Summary run {args.run_id} was not found for session {session.id}"
+        )
+    checkpoints = (
+        database.get_summary_checkpoints(session.id, summary.id)
+        if summary is not None
+        else []
+    )
+    provider = OllamaProvider(
+        model_name=args.model,
+        base_url=args.ollama_url,
+        timeout_seconds=args.timeout,
+    )
+    agent = SessionQuestionAgent(
+        provider=provider,
+        transcript=transcript,
+        summary=summary,
+        checkpoints=checkpoints,
+        max_steps=args.max_steps,
+    )
+
+    print(f"Answering from session {session.id} with {args.model}...")
+    started_at = perf_counter()
+    result = agent.answer(
+        args.question,
+        trace=(lambda message: print(f"[agent] {message}")) if args.debug else None,
+    )
+    elapsed = perf_counter() - started_at
+    print("\nAnswer")
+    print(result.answer)
+    print(f"\nAgent steps: {result.step_count}")
+    print(f"Tools used: {', '.join(result.tool_calls) or 'none'}")
+    print(f"Processing time: {_format_timestamp(elapsed)}")
+    return 0
+
+
 def _summarize(args: argparse.Namespace, settings: Settings) -> int:
     if args.timeout <= 0:
         raise ValueError("--timeout must be greater than zero")
@@ -600,6 +674,7 @@ def main(argv: list[str] | None = None) -> int:
             "search": _search,
             "transcript-range": _transcript_range,
             "notes": _notes,
+            "ask": _ask,
             "summarize": _summarize,
             "summary": _summary,
             "summary-runs": _summary_runs,

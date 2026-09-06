@@ -13,6 +13,41 @@ MAX_SEARCH_RESULTS = 20
 MAX_TRANSCRIPT_RANGE_SECONDS = 600
 _WORD_PATTERN = re.compile(r"[^\W_]+(?:['’-][^\W_]+)*", re.UNICODE)
 
+# Small, deterministic groups improve lexical retrieval without introducing a
+# second model or an embedding dependency. Original query terms still carry
+# more ranking weight than these alternatives.
+_SYNONYM_GROUPS = (
+    frozenset({"write", "writes", "writing", "wrote", "written", "text", "textual"}),
+    frozenset({"print", "prints", "printing", "printed", "press"}),
+    frozenset(
+        {
+            "change", "changes", "changed", "changing", "shift", "shifts",
+            "shifted", "transform", "transforms", "transformed", "alter",
+            "alters", "altered", "effect", "effects", "impact", "impacts",
+        }
+    ),
+    frozenset({"poetry", "poem", "poems", "poetic", "verse", "verses"}),
+    frozenset({"reader", "readers", "audience", "audiences"}),
+    frozenset({"speak", "speaks", "spoken", "speech", "oral", "orally"}),
+    frozenset(
+        {
+            "perform", "performs", "performed", "performing", "performance",
+            "performer", "performers", "recite", "recited", "recitation",
+        }
+    ),
+    frozenset(
+        {
+            "preserve", "preserves", "preserved", "record", "records",
+            "recorded", "fixed", "stable", "permanent",
+        }
+    ),
+)
+_SYNONYMS_BY_TERM = {
+    term: group - {term}
+    for group in _SYNONYM_GROUPS
+    for term in group
+}
+
 
 @dataclass(frozen=True, slots=True)
 class TranscriptSearchResult:
@@ -30,8 +65,9 @@ def search_transcript(
     query: str,
     *,
     limit: int = 5,
+    additional_terms: Sequence[str] = (),
 ) -> list[TranscriptSearchResult]:
-    """Return a bounded, deterministic ranking of transcript segments."""
+    """Return a bounded ranking using exact, synonymous, and contextual terms."""
 
     if limit < 1 or limit > MAX_SEARCH_RESULTS:
         raise ValueError(f"limit must be between 1 and {MAX_SEARCH_RESULTS}")
@@ -41,23 +77,53 @@ def search_transcript(
         raise ValueError("search query must contain at least one word")
 
     unique_query_terms = tuple(dict.fromkeys(query_terms))
+    expanded_terms = tuple(
+        dict.fromkeys(
+            synonym
+            for term in unique_query_terms
+            for synonym in sorted(_SYNONYMS_BY_TERM.get(term, ()))
+            if synonym not in unique_query_terms
+        )
+    )
+    contextual_terms = tuple(
+        term
+        for term in dict.fromkeys(
+            token
+            for value in additional_terms
+            for token in _tokenize(value)
+        )
+        if term not in unique_query_terms and term not in expanded_terms
+    )
     results: list[TranscriptSearchResult] = []
     for segment in segments:
         text_terms = _tokenize(segment.text)
         term_counts = Counter(text_terms)
-        matched_terms = tuple(
+        matched_query_terms = tuple(
             term for term in unique_query_terms if term_counts[term] > 0
         )
-        if not matched_terms:
+        matched_expanded_terms = tuple(
+            term for term in expanded_terms if term_counts[term] > 0
+        )
+        matched_contextual_terms = tuple(
+            term for term in contextual_terms if term_counts[term] > 0
+        )
+        if not matched_query_terms and not matched_expanded_terms:
             continue
+        matched_terms = tuple(
+            dict.fromkeys(
+                (*matched_query_terms, *matched_expanded_terms, *matched_contextual_terms)
+            )
+        )
 
         phrase_matches = _count_phrase_occurrences(text_terms, query_terms)
-        all_terms_match = len(matched_terms) == len(unique_query_terms)
+        all_terms_match = len(matched_query_terms) == len(unique_query_terms)
         score = (
             phrase_matches * 100
             + int(all_terms_match) * 25
-            + len(matched_terms) * 5
+            + len(matched_query_terms) * 8
             + sum(term_counts[term] for term in unique_query_terms)
+            + len(matched_expanded_terms) * 3
+            + len(matched_contextual_terms) * 4
         )
         results.append(
             TranscriptSearchResult(
@@ -73,6 +139,24 @@ def search_transcript(
 
     results.sort(key=lambda item: (-item.score, item.start_seconds, item.segment_id))
     return results[:limit]
+
+
+def expand_search_terms(text: str) -> tuple[str, ...]:
+    """Return normalized query words plus deterministic word-form alternatives."""
+
+    terms = tuple(dict.fromkeys(_tokenize(text)))
+    return tuple(
+        dict.fromkeys(
+            (
+                *terms,
+                *(
+                    synonym
+                    for term in terms
+                    for synonym in sorted(_SYNONYMS_BY_TERM.get(term, ()))
+                ),
+            )
+        )
+    )
 
 
 def get_transcript_range(

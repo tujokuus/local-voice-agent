@@ -41,6 +41,42 @@ class TranscriptSearchTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].segment_id, 10)
 
+    def test_search_expands_word_forms_and_synonyms(self) -> None:
+        results = search_transcript(self.segments, "written verse")
+
+        self.assertEqual(results[0].segment_id, 11)
+        self.assertIn("writing", results[0].matched_terms)
+        self.assertIn("poetry", results[0].matched_terms)
+
+    def test_context_terms_can_improve_ranking_without_replacing_query(self) -> None:
+        segments = [
+            *self.segments,
+            StoredTranscriptSegment(
+                id=20,
+                session_id=2,
+                index=3,
+                start_seconds=30,
+                end_seconds=40,
+                text="Writing fixed content for absent readers.",
+            ),
+        ]
+
+        results = search_transcript(
+            segments,
+            "writing change poetry",
+            additional_terms=("fixed", "content", "absent", "readers"),
+        )
+
+        self.assertEqual(results[0].segment_id, 20)
+        self.assertEqual(
+            search_transcript(
+                segments,
+                "astronomy",
+                additional_terms=("writing", "poetry"),
+            ),
+            [],
+        )
+
     def test_no_match_returns_empty_list(self) -> None:
         self.assertEqual(search_transcript(self.segments, "astronomy"), [])
 
