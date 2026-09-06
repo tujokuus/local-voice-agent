@@ -38,3 +38,5 @@ models/
 .DS_Store
 Thumbs.db
 
+# Local planning notes
+docs/MVP_PLAN.md

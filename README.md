@@ -176,10 +176,22 @@ Inspect the model's selected actions while developing:
     "How did writing change poetry?" --model qwen3.5:4b --debug
 ```
 
-The agent has only three read-only tools: bounded transcript search, bounded transcript range
+The default `final` mode uses a bounded manual retrieval loop followed by a separate tool-free
+`FinalAnswer` phase. The model returns claims with transcript segment IDs, the application validates
+those IDs against retrieved evidence, and the application—not the model—renders timestamp
+citations. Once retrieval finishes, the model cannot call another tool.
+
+Run the original manual agent loop as a comparison baseline:
+
+```powershell
+.\.venv\Scripts\python.exe -m local_voice_agent ask 2 `
+    "How did writing change poetry?" --model qwen3.5:4b `
+    --agent-mode manual --debug
+```
+
+Both modes have only three read-only tools: bounded transcript search, bounded transcript range
 retrieval, and the selected session's stored summary. A supported factual answer requires both a
-search and inspection of a relevant transcript range. The loop has a fixed step limit, and answers
-must copy timestamp citations returned by a tool.
+search and inspection of a relevant transcript range. The loop has a fixed step limit.
 
 For range inspection, the model must select a `segment_id` returned by search. The application—not
 the model—then reads 30 seconds on both sides of that segment. Invalid selections receive at most
@@ -189,10 +201,11 @@ planning context only; final claims must still be verified from transcript segme
 
 After each retrieved passage, the agent checks whether it directly answers the original question.
 It can make one different follow-up search when the first passage is irrelevant or incomplete, and
-it cannot declare evidence insufficient until both searches have been tried. Rejected final answers
-have a separate three-repair allowance and do not consume the configured valid-step budget. With
-`--debug`, the rejection reason is printed. The original question is repeated after every tool
-result to reduce topic drift.
+it cannot declare evidence insufficient until both searches have been tried. In default `final`
+mode, two searches plus two transcript reads automatically trigger FinalAnswer. Invalid FinalAnswer
+outputs have a separate three-repair allowance and do not consume the configured step budget. With
+`--debug`, rejection reasons and the transition to the tool-free final phase are printed. The
+original question is repeated after every retrieval result to reduce topic drift.
 
 The default database is `data/local_voice_agent.db`. Put `--database PATH` before the subcommand to use another database.
 
@@ -222,6 +235,7 @@ The MVP intentionally supports only English even though the language is configur
 ```text
 src/local_voice_agent/
 ├── cli.py                  command-line interface
+├── agent.py                manual baseline and forced FinalAnswer workflow
 ├── config.py               environment-backed settings
 ├── models.py               validated application models
 ├── service.py              audio processing use case
@@ -248,8 +262,6 @@ The MVP will be built as small end-to-end slices:
 3. Generate checkpoints and a final summary.
 4. Ask questions through transcript retrieval and a manual agent loop.
 5. Add debug output, notes, failure handling, focused tests, and documentation.
-
-See [docs/MVP_PLAN.md](docs/MVP_PLAN.md) for the detailed plan.
 
 ## Test material
 

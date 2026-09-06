@@ -3,7 +3,13 @@ from __future__ import annotations
 import unittest
 from datetime import UTC, datetime
 
-from local_voice_agent.agent import AgentStep, SessionQuestionAgent
+from local_voice_agent.agent import (
+    AgentStep,
+    FinalAnswer,
+    ForcedFinalAnswerAgent,
+    RetrievalStep,
+    SessionQuestionAgent,
+)
 from local_voice_agent.llm import StructuredResponse
 from local_voice_agent.models import StoredTranscriptSegment
 from local_voice_agent.summaries import StoredFinalSummary
@@ -16,16 +22,31 @@ class FakeProvider:
         self.responses = responses
         self.calls = 0
         self.message_history = []
+        self.response_models = []
 
     def structured_chat(self, *, messages, response_model):
         self.message_history.append(list(messages))
-        payload = {
-            "query": None,
-            "segment_id": None,
-            "answer": None,
-            "evidence_insufficient": False,
-            **self.responses[self.calls],
-        }
+        self.response_models.append(response_model)
+        if response_model is AgentStep:
+            defaults = {
+                "query": None,
+                "segment_id": None,
+                "answer": None,
+                "evidence_insufficient": False,
+            }
+        elif response_model is RetrievalStep:
+            defaults = {
+                "query": None,
+                "segment_id": None,
+                "evidence_insufficient": False,
+            }
+        else:
+            defaults = {
+                "claims": [],
+                "evidence_insufficient": False,
+                "explanation": None,
+            }
+        payload = {**defaults, **self.responses[self.calls]}
         response = response_model.model_validate(payload)
         self.calls += 1
         return StructuredResponse(
@@ -326,6 +347,176 @@ class SessionQuestionAgentTests(unittest.TestCase):
                 "evidence_insufficient",
             },
         )
+
+        self.assertEqual(
+            set(RetrievalStep.model_json_schema()["required"]),
+            {"action", "query", "segment_id", "evidence_insufficient"},
+        )
+        self.assertEqual(
+            set(FinalAnswer.model_json_schema()["required"]),
+            {"claims", "evidence_insufficient", "explanation"},
+        )
+
+    def test_forced_final_answer_uses_segment_ids_and_app_generated_citation(self) -> None:
+        provider = FakeProvider(
+            [
+                {"action": "search_transcript", "query": "writing poetry"},
+                {"action": "get_transcript", "segment_id": 42},
+                {"action": "finish_retrieval"},
+                {
+                    "claims": [
+                        {
+                            "text": "Writing fixed poetry for absent readers.",
+                            "segment_ids": [42],
+                        }
+                    ],
+                },
+            ]
+        )
+        agent = ForcedFinalAnswerAgent(
+            provider=provider,
+            transcript=self.transcript,
+            summary=None,
+            checkpoints=[],
+        )
+
+        result = agent.answer("How did writing affect poetry?")
+
+        self.assertEqual(result.step_count, 4)
+        self.assertEqual(
+            result.answer,
+            "Writing fixed poetry for absent readers [00:01:40-00:01:50].",
+        )
+        self.assertEqual(provider.response_models[-1], FinalAnswer)
+        final_prompt = provider.message_history[-1][-1].content
+        self.assertIn("segment_id=42", final_prompt)
+        self.assertIn("Tools are disabled", provider.message_history[-1][0].content)
+
+    def test_forced_final_answer_retries_unretrieved_segment_id(self) -> None:
+        provider = FakeProvider(
+            [
+                {"action": "search_transcript", "query": "writing poetry"},
+                {"action": "get_transcript", "segment_id": 42},
+                {"action": "finish_retrieval"},
+                {
+                    "claims": [
+                        {"text": "Unsupported claim.", "segment_ids": [999]}
+                    ],
+                },
+                {
+                    "claims": [
+                        {"text": "Writing fixed poetry.", "segment_ids": [42]}
+                    ],
+                },
+            ]
+        )
+        trace_messages: list[str] = []
+        agent = ForcedFinalAnswerAgent(
+            provider=provider,
+            transcript=self.transcript,
+            summary=None,
+            checkpoints=[],
+        )
+
+        result = agent.answer(
+            "How did writing affect poetry?", trace=trace_messages.append
+        )
+
+        self.assertEqual(result.step_count, 4)
+        self.assertTrue(
+            any(
+                "FinalAnswer repair 1/3" in message
+                and "were not retrieved" in message
+                for message in trace_messages
+            )
+        )
+
+    def test_forced_final_answer_starts_automatically_after_two_passages(self) -> None:
+        transcript = [
+            *self.transcript,
+            StoredTranscriptSegment(
+                id=43,
+                session_id=2,
+                index=1,
+                start_seconds=110,
+                end_seconds=120,
+                text="Printing encouraged poets to write for the eye.",
+            ),
+        ]
+        provider = FakeProvider(
+            [
+                {"action": "search_transcript", "query": "writing poetry"},
+                {"action": "get_transcript", "segment_id": 42},
+                {"action": "search_transcript", "query": "printing visual"},
+                {"action": "get_transcript", "segment_id": 43},
+                {
+                    "claims": [
+                        {
+                            "text": "Writing fixed poetry for absent readers.",
+                            "segment_ids": [42],
+                        },
+                        {
+                            "text": "Printing encouraged writing for the eye.",
+                            "segment_ids": [43],
+                        },
+                    ],
+                },
+            ]
+        )
+        trace_messages: list[str] = []
+        agent = ForcedFinalAnswerAgent(
+            provider=provider,
+            transcript=transcript,
+            summary=None,
+            checkpoints=[],
+        )
+
+        result = agent.answer(
+            "How did writing affect poetry?", trace=trace_messages.append
+        )
+
+        self.assertEqual(result.step_count, 5)
+        self.assertEqual(provider.calls, 5)
+        self.assertIn("[00:01:50-00:02:00]", result.answer)
+        self.assertIn(
+            "Retrieval limit reached; forcing FinalAnswer with tools disabled",
+            trace_messages,
+        )
+
+    def test_forced_final_answer_can_report_insufficient_evidence_after_two_searches(self) -> None:
+        provider = FakeProvider(
+            [
+                {"action": "search_transcript", "query": "astronomy galaxies"},
+                {"action": "search_transcript", "query": "planets stars"},
+                {
+                    "evidence_insufficient": True,
+                    "explanation": "The recording does not discuss astronomy.",
+                },
+            ]
+        )
+        agent = ForcedFinalAnswerAgent(
+            provider=provider,
+            transcript=self.transcript,
+            summary=None,
+            checkpoints=[],
+        )
+
+        result = agent.answer("What does the recording say about astronomy?")
+
+        self.assertEqual(result.step_count, 3)
+        self.assertEqual(result.answer, "The recording does not discuss astronomy.")
+
+    def test_forced_final_answer_requires_room_for_search_get_and_final(self) -> None:
+        agent = ForcedFinalAnswerAgent(
+            provider=FakeProvider([]),
+            transcript=self.transcript,
+            summary=None,
+            checkpoints=[],
+            max_steps=2,
+        )
+
+        with self.assertRaisesRegex(ValueError, "at least 3"):
+            agent.answer("What changed?")
 
 
 if __name__ == "__main__":

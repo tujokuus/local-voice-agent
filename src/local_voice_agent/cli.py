@@ -8,7 +8,11 @@ import sys
 from pathlib import Path
 from time import perf_counter
 
-from local_voice_agent.agent import MAX_AGENT_STEPS, SessionQuestionAgent
+from local_voice_agent.agent import (
+    MAX_AGENT_STEPS,
+    ForcedFinalAnswerAgent,
+    SessionQuestionAgent,
+)
 from local_voice_agent.config import Settings
 from local_voice_agent.llm import OllamaProvider
 from local_voice_agent.models import SessionStatus
@@ -116,6 +120,15 @@ def _build_parser(settings: Settings) -> argparse.ArgumentParser:
     )
     ask_parser.add_argument(
         "--run-id", type=int, help="Use a specific stored summary run"
+    )
+    ask_parser.add_argument(
+        "--agent-mode",
+        choices=("final", "manual"),
+        default="final",
+        help=(
+            "Use forced segment-grounded FinalAnswer or the original manual agent "
+            "loop (default: final)"
+        ),
     )
     ask_parser.add_argument(
         "--debug", action="store_true", help="Print the agent's selected actions"
@@ -402,7 +415,12 @@ def _ask(args: argparse.Namespace, settings: Settings) -> int:
         base_url=args.ollama_url,
         timeout_seconds=args.timeout,
     )
-    agent = SessionQuestionAgent(
+    agent_class = (
+        ForcedFinalAnswerAgent
+        if args.agent_mode == "final"
+        else SessionQuestionAgent
+    )
+    agent = agent_class(
         provider=provider,
         transcript=transcript,
         summary=summary,
@@ -410,7 +428,10 @@ def _ask(args: argparse.Namespace, settings: Settings) -> int:
         max_steps=args.max_steps,
     )
 
-    print(f"Answering from session {session.id} with {args.model}...")
+    print(
+        f"Answering from session {session.id} with {args.model} "
+        f"(agent_mode={args.agent_mode})..."
+    )
     started_at = perf_counter()
     result = agent.answer(
         args.question,
