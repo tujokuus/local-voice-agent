@@ -1,0 +1,273 @@
+{
+  "schema_version": 1,
+  "id": "poetry_session_2",
+  "description": "Twelve hand-authored questions grounded in the substantive portions of Session 2. Timestamp ranges are the portable gold keys; segment IDs audit the supplied transcript. Reference answers and required points support human review, not automated correctness grading.",
+  "source_session_id": 2,
+  "cases": [
+    {
+      "id": "translation_form_and_psalms",
+      "question": "Why does the recording describe poetry as difficult to translate, and why might the Hebrew Psalms be an exception?",
+      "answerable": true,
+      "category": "focused",
+      "difficulty": "medium",
+      "reference_answer": "Poetry emphasizes linguistic form rather than using language purely for its content, making translation difficult. The Hebrew Psalms are offered as a possible exception because their beauty lies more in the balance of ideas than in the specific vocabulary.",
+      "required_points": [
+        "Poetry's emphasis on linguistic form, rather than content alone, makes translation difficult.",
+        "The Hebrew Psalms are a possible exception because their beauty depends more on balanced ideas than specific vocabulary."
+      ],
+      "gold_evidence_ranges": [
+        {
+          "start_seconds": 80,
+          "end_seconds": 105,
+          "segment_ids": [14, 15, 16, 17],
+          "explanation": "Includes the complete explanation of translation difficulty and the full qualification and reason for the possible Psalms exception."
+        }
+      ],
+      "tags": ["lexical", "explanation", "multi_segment"]
+    },
+    {
+      "id": "prose_expansiveness_and_logic",
+      "question": "How does the recording contrast prose and poetry in how fully they spell out meaning and follow a logical structure?",
+      "answerable": true,
+      "category": "focused",
+      "difficulty": "hard",
+      "reference_answer": "Prose conveys meaning more expansively and less compactly, often using more complete logical or narrative structures. The recording says this does not make poetry illogical; poetry is often created from a desire to escape the logical.",
+      "required_points": [
+        "Prose is more expansive and less condensed, often with more complete logical or narrative structures.",
+        "Poetry is not necessarily illogical, even though it often arises from a need to escape the logical."
+      ],
+      "gold_evidence_ranges": [
+        {
+          "start_seconds": 127,
+          "end_seconds": 149,
+          "segment_ids": [22, 23, 24, 25],
+          "explanation": "Covers the complete prose comparison and the caution against calling poetry illogical."
+        }
+      ],
+      "tags": ["paraphrase", "semantic_challenge", "multi_segment"]
+    },
+    {
+      "id": "rhyme_is_not_universal",
+      "question": "According to the recording, is rhyme universal in poetry, and which examples show this?",
+      "answerable": true,
+      "category": "focused",
+      "difficulty": "easy",
+      "reference_answer": "No. Much modern poetry avoids traditional rhyme schemes, and classical Greek and Latin poetry did not use rhyme.",
+      "required_points": [
+        "Rhyme is not universal in poetry.",
+        "Much modern poetry avoids traditional rhyme schemes.",
+        "Classical Greek and Latin poetry did not use rhyme."
+      ],
+      "gold_evidence_ranges": [
+        {
+          "start_seconds": 260,
+          "end_seconds": 279,
+          "segment_ids": [42, 43, 44],
+          "explanation": "Contains the non-universality statement and both examples; segment 44 completes the claim about Greek and Latin poetry."
+        }
+      ],
+      "tags": ["lexical", "direct_fact", "multi_segment"]
+    },
+    {
+      "id": "hebrew_parallelism_and_performance",
+      "question": "What was the chief device of biblical poetry in ancient Hebrew, how did it work, and what kind of performance did it suit?",
+      "answerable": true,
+      "category": "focused",
+      "difficulty": "medium",
+      "reference_answer": "The chief device was parallelism: successive lines reflected one another in grammatical structure, sound structure, notional content, or all three. This form suited antiphonal, or call-and-response, performance.",
+      "required_points": [
+        "Parallelism was the chief device of biblical poetry in ancient Hebrew.",
+        "Successive lines reflected each other in grammatical structure, sound structure, notional content, or all three.",
+        "The form lent itself to antiphonal or call-and-response performance."
+      ],
+      "gold_evidence_ranges": [
+        {
+          "start_seconds": 334,
+          "end_seconds": 358,
+          "segment_ids": [54, 55, 56, 57],
+          "explanation": "Includes the identification, complete definition, and performance implication of parallelism."
+        }
+      ],
+      "tags": ["lexical", "definition", "multi_segment"]
+    },
+    {
+      "id": "printing_visual_control",
+      "question": "What new expressive options did printing give poets over how their work appears on a page?",
+      "answerable": true,
+      "category": "focused",
+      "difficulty": "hard",
+      "reference_answer": "Printing gave poets greater control over the visual presentation of their work. Formal elements and the white space they created consequently became important tools for poets.",
+      "required_points": [
+        "Printing gave poets greater control over visual presentation.",
+        "Formal elements and the white space they created became important poetic tools."
+      ],
+      "gold_evidence_ranges": [
+        {
+          "start_seconds": 436,
+          "end_seconds": 452,
+          "segment_ids": [71, 72, 73],
+          "explanation": "Covers printing's effect on visual control and the resulting use of formal elements and white space."
+        }
+      ],
+      "tags": ["paraphrase", "semantic_challenge", "multi_segment"]
+    },
+    {
+      "id": "modernism_direct_presentation",
+      "question": "What did some poets prefer to do instead of relying heavily on rhetorical devices, particularly after the rise of modernism?",
+      "answerable": true,
+      "category": "focused",
+      "difficulty": "medium",
+      "reference_answer": "Some poets reduced their use of rhetorical devices in favor of trying to present things and experiences directly.",
+      "required_points": [
+        "Some poets reduced their use of rhetorical devices.",
+        "They preferred attempting the direct presentation of things and experiences."
+      ],
+      "gold_evidence_ranges": [
+        {
+          "start_seconds": 471,
+          "end_seconds": 475,
+          "segment_ids": [78],
+          "explanation": "Identifies rhetorical devices, including simile and metaphor, as the antecedent of 'these devices' in the later passage."
+        },
+        {
+          "start_seconds": 484,
+          "end_seconds": 496,
+          "segment_ids": [81, 82, 83],
+          "explanation": "Contains the modernism qualification, reduced-device choice, and complete statement of the alternative preference."
+        }
+      ],
+      "tags": ["paraphrase", "lexical", "multi_segment"]
+    },
+    {
+      "id": "preliterate_knowledge_and_liturgy",
+      "question": "What purposes did poetry serve in preliterate societies, and why was it closely associated with liturgy?",
+      "answerable": true,
+      "category": "focused",
+      "difficulty": "medium",
+      "reference_answer": "Poetry preserved or expressed oral history, stories and epics, genealogy, law, and other knowledge that modern societies might put in prose. Its formal nature made priestly incantations and prophecies easier to remember, which connected it closely with liturgy.",
+      "required_points": [
+        "Poetry recorded oral history, storytelling or epics, genealogy, law, and other expression or knowledge.",
+        "Its formal nature made priestly incantations or prophecies easy to remember, helping explain its association with liturgy."
+      ],
+      "gold_evidence_ranges": [
+        {
+          "start_seconds": 508,
+          "end_seconds": 537,
+          "segment_ids": [87, 88, 89, 90, 91],
+          "explanation": "Covers the uses of poetry in preliterate societies and the complete explanation of its connection with liturgy."
+        }
+      ],
+      "tags": ["lexical", "explanation", "multi_segment"]
+    },
+    {
+      "id": "performance_poetry_resurgence",
+      "question": "What developments renewed performance poetry, and how did this affect the relationship between poetry meant to be read and poetry meant to be heard?",
+      "answerable": true,
+      "category": "focused",
+      "difficulty": "hard",
+      "reference_answer": "Electronic media and the rise of poetry readings led to a resurgence of performance poetry. Poetry for the eye and poetry for the ear came to coexist, sometimes within the same poem.",
+      "required_points": [
+        "Electronic media and the rise of poetry readings contributed to the resurgence of performance poetry.",
+        "Poetry for the eye and poetry for the ear coexist, sometimes in the same poem."
+      ],
+      "gold_evidence_ranges": [
+        {
+          "start_seconds": 685,
+          "end_seconds": 707,
+          "segment_ids": [118, 119, 120, 121],
+          "explanation": "Starts with the introduction of electronic media and includes the full coexistence claim, whose same-poem qualification ends in segment 121."
+        }
+      ],
+      "tags": ["paraphrase", "semantic_challenge", "multi_segment"]
+    },
+    {
+      "id": "free_verse_and_meter_comparison",
+      "question": "How does the recording contrast the organization of rhythm in free verse with the role of meter in early Germanic alliteration and modern European rhyme?",
+      "answerable": true,
+      "category": "synthesis",
+      "difficulty": "hard",
+      "reference_answer": "Free verse often organizes the rhythm of its lines into looser units of cadence. Early Germanic alliterative patterns and modern European rhyme schemes both use meter as a structural element that determines when listeners expect alliteration or rhyme. In those structures, alliteration and rhyme help emphasize and define the rhythmic pattern.",
+      "required_points": [
+        "Free verse often organizes line rhythm into looser units of cadence.",
+        "Both early Germanic alliterative patterns and modern European rhyme schemes use meter to determine when listeners expect alliteration or rhyme.",
+        "Alliteration and rhyme help emphasize and define a rhythmic pattern when used in those poetic structures."
+      ],
+      "gold_evidence_ranges": [
+        {
+          "start_seconds": 242,
+          "end_seconds": 249,
+          "segment_ids": [39],
+          "explanation": "Provides the complete description of free-verse rhythm as looser units of cadence."
+        },
+        {
+          "start_seconds": 310,
+          "end_seconds": 340,
+          "segment_ids": [50, 51, 52, 53, 54],
+          "explanation": "Covers the comparison of Germanic alliteration and European rhyme, meter's role in expectation, and the rhythmic-pattern conclusion completed in segment 54."
+        }
+      ],
+      "tags": ["lexical", "cross_passage", "comparison", "multi_segment"]
+    },
+    {
+      "id": "oral_writing_printing_transition",
+      "question": "How did the move from oral performance to writing, and then printing, change the stability of poems and the audience poets composed for?",
+      "answerable": true,
+      "category": "synthesis",
+      "difficulty": "hard",
+      "reference_answer": "In preliterate societies, poems were composed for performance and sometimes during it, so exact wording could vary between performances or performers. Writing tended to fix a poem to the version written down and preserved, and poets began composing for an absent reader rather than an audience in front of them. Printing accelerated these trends, with poets writing more for the eye than for the ear.",
+      "required_points": [
+        "Oral poems were composed for, and sometimes during, performance, and their wording could vary by performance or performer.",
+        "Writing tended to fix content to the version that was written down and survived.",
+        "Written composition shifted the intended audience from a present audience to an absent reader.",
+        "Printing accelerated these trends, with poets writing more for the eye than for the ear."
+      ],
+      "gold_evidence_ranges": [
+        {
+          "start_seconds": 619,
+          "end_seconds": 637,
+          "segment_ids": [106, 107, 108],
+          "explanation": "Contains composition for or during performance and the complete explanation of variable wording."
+        },
+        {
+          "start_seconds": 638,
+          "end_seconds": 652,
+          "segment_ids": [109, 110, 111],
+          "explanation": "Segments 109 and 110 together support fixation to the written version that survived; segments 110 and 111 together support the shift to an absent reader."
+        },
+        {
+          "start_seconds": 652,
+          "end_seconds": 662,
+          "segment_ids": [112, 113],
+          "explanation": "Covers printing accelerating the changes and the complete statement that poets wrote more for the eye than the ear."
+        }
+      ],
+      "tags": ["paraphrase", "semantic_challenge", "adjacent_passages", "multi_segment"]
+    },
+    {
+      "id": "unanswerable_named_introducer_of_rhyme",
+      "question": "Which individual poet does the recording identify as introducing rhyme into European poetry in the high Middle Ages?",
+      "answerable": false,
+      "category": "unanswerable",
+      "difficulty": "medium",
+      "reference_answer": "The recording does not identify an individual poet who introduced rhyme into European poetry. It says rhyme was adopted from Arabic in the high Middle Ages, but does not provide the requested person's name.",
+      "required_points": [
+        "The recording does not name an individual poet who introduced rhyme into European poetry, so it cannot supply the requested identity."
+      ],
+      "gold_evidence_ranges": [],
+      "tags": ["insufficient_evidence", "near_miss", "missing_attribution"]
+    },
+    {
+      "id": "unanswerable_slam_popularity_numbers",
+      "question": "What numerical evidence does the recording give for the increase in popularity of slam poetry?",
+      "answerable": false,
+      "category": "unanswerable",
+      "difficulty": "hard",
+      "reference_answer": "The recording does not provide numerical evidence for the increase in slam poetry's popularity. It mentions increased popularity, but gives no figures with which to quantify it.",
+      "required_points": [
+        "The recording does not provide figures or numerical evidence quantifying the increase in slam poetry's popularity."
+      ],
+      "gold_evidence_ranges": [],
+      "tags": ["insufficient_evidence", "near_miss", "missing_quantification"]
+    }
+  ]
+}

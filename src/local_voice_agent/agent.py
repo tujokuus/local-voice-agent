@@ -174,9 +174,15 @@ class ToolResult:
 
 @dataclass(frozen=True, slots=True)
 class QuestionAnswer:
+    """Answer plus exposed transcript rows, cited sources, and rendered time ranges."""
+
     answer: str
     step_count: int
     tool_calls: tuple[str, ...]
+    retrieved_segment_ids: tuple[int, ...] = ()
+    cited_segment_ids: tuple[int, ...] = ()
+    citation_ranges: tuple[tuple[float, float], ...] = ()
+    evidence_insufficient: bool | None = None
 
 
 TraceCallback = Callable[[str], None]
@@ -204,6 +210,7 @@ class SessionQuestionAgent:
         self.summary = summary
         self.checkpoints = checkpoints
         self.max_steps = max_steps
+        self.last_telemetry: QuestionAnswer | None = None
         self._search_orientation_terms: tuple[str, ...] = ()
         self._tools: dict[
             str, Callable[[AgentStep, set[int]], ToolResult]
@@ -219,6 +226,7 @@ class SessionQuestionAgent:
         *,
         trace: TraceCallback | None = None,
     ) -> QuestionAnswer:
+        self.last_telemetry = None
         normalized_question = question.strip()
         if not normalized_question:
             raise ValueError("question cannot be empty")
@@ -254,6 +262,7 @@ class SessionQuestionAgent:
         seen_calls: set[tuple[object, ...]] = set()
         allowed_citations: set[tuple[str, str]] = set()
         eligible_segment_ids: set[int] = set()
+        exposed_segment_ids: set[int] = set()
         completed_steps = 0
         attempt_count = 0
         tool_repairs = 0
@@ -275,10 +284,12 @@ class SessionQuestionAgent:
                     completed_steps += 1
                     if trace is not None:
                         trace(self._trace_text(completed_steps, step))
-                    return QuestionAnswer(
+                    return self._record_telemetry(
                         answer=step.answer or "",
                         step_count=completed_steps,
-                        tool_calls=tuple(used_tools),
+                        used_tools=used_tools,
+                        retrieved_segment_ids=exposed_segment_ids,
+                        evidence_insufficient=step.evidence_insufficient,
                     )
                 if answer_repairs >= MAX_ANSWER_REPAIRS:
                     if trace is not None:
@@ -332,6 +343,13 @@ class SessionQuestionAgent:
                     completed_steps += 1
                     used_tools.append(step.action)
                     eligible_segment_ids.update(result.segment_ids)
+                    exposed_segment_ids.update(result.segment_ids)
+                    exposed_segment_ids.update(result.retrieved_segment_ids)
+                    self._record_telemetry(
+                        step_count=completed_steps,
+                        used_tools=used_tools,
+                        retrieved_segment_ids=exposed_segment_ids,
+                    )
                 allowed_citations.update(result.citations)
 
             if result.success:
@@ -380,6 +398,45 @@ class SessionQuestionAgent:
             f"{self.max_steps} valid steps, {MAX_TOOL_REPAIRS} tool repairs, "
             f"and {MAX_ANSWER_REPAIRS} answer repairs"
         )
+
+    def _record_telemetry(
+        self,
+        *,
+        step_count: int,
+        used_tools: list[str],
+        retrieved_segment_ids: set[int],
+        answer: str = "",
+        cited_segment_ids: set[int] | None = None,
+        evidence_insufficient: bool | None = None,
+    ) -> QuestionAnswer:
+        """Record exposed rows without changing the agent's evidence eligibility."""
+
+        citation_ranges = _citation_ranges(answer)
+        if cited_segment_ids is None:
+            cited_segment_ids = {
+                segment.id
+                for segment in self.transcript
+                if any(
+                    (segment.start_seconds < end and segment.end_seconds > start)
+                    # Subsecond rows can render as a zero-duration citation.
+                    or (
+                        start == end
+                        and int(segment.start_seconds) == start
+                        and int(segment.end_seconds) == end
+                    )
+                    for start, end in citation_ranges
+                )
+            }
+        self.last_telemetry = QuestionAnswer(
+            answer=answer,
+            step_count=step_count,
+            tool_calls=tuple(used_tools),
+            retrieved_segment_ids=tuple(sorted(retrieved_segment_ids)),
+            cited_segment_ids=tuple(sorted(cited_segment_ids)),
+            citation_ranges=citation_ranges,
+            evidence_insufficient=evidence_insufficient,
+        )
+        return self.last_telemetry
 
     def _request_step(self, messages: list[ChatMessage]) -> StructuredResponse[AgentStep]:
         try:
@@ -655,6 +712,7 @@ class ForcedFinalAnswerAgent(SessionQuestionAgent):
         *,
         trace: TraceCallback | None = None,
     ) -> QuestionAnswer:
+        self.last_telemetry = None
         if self.max_steps < 3:
             raise ValueError("forced FinalAnswer mode requires at least 3 max steps")
         normalized_question = question.strip()
@@ -691,6 +749,7 @@ class ForcedFinalAnswerAgent(SessionQuestionAgent):
         seen_calls: set[tuple[object, ...]] = set()
         eligible_segment_ids: set[int] = set()
         retrieved_segment_ids: set[int] = set()
+        exposed_segment_ids: set[int] = set()
         completed_steps = 0
         attempt_count = 0
         tool_repairs = 0
@@ -756,6 +815,13 @@ class ForcedFinalAnswerAgent(SessionQuestionAgent):
                         used_tools.append(step.action)
                         eligible_segment_ids.update(result.segment_ids)
                         retrieved_segment_ids.update(result.retrieved_segment_ids)
+                        exposed_segment_ids.update(result.segment_ids)
+                        exposed_segment_ids.update(result.retrieved_segment_ids)
+                        self._record_telemetry(
+                            step_count=completed_steps,
+                            used_tools=used_tools,
+                            retrieved_segment_ids=exposed_segment_ids,
+                        )
 
             if result.success:
                 if trace is not None and tool_step is not None:
@@ -834,6 +900,11 @@ class ForcedFinalAnswerAgent(SessionQuestionAgent):
                     "completed searches"
                 )
 
+        self._record_telemetry(
+            step_count=completed_steps,
+            used_tools=used_tools,
+            retrieved_segment_ids=exposed_segment_ids,
+        )
         answer = self._create_final_answer(
             normalized_question,
             retrieved_segment_ids=retrieved_segment_ids,
@@ -850,10 +921,15 @@ class ForcedFinalAnswerAgent(SessionQuestionAgent):
                 f"evidence_insufficient={answer.evidence_insufficient} "
                 f"claims={len(answer.claims)} (tools disabled)"
             )
-        return QuestionAnswer(
+        return self._record_telemetry(
             answer=self._render_final_answer(answer),
             step_count=completed_steps,
-            tool_calls=tuple(used_tools),
+            used_tools=used_tools,
+            retrieved_segment_ids=exposed_segment_ids,
+            cited_segment_ids={
+                segment_id for claim in answer.claims for segment_id in claim.segment_ids
+            },
+            evidence_insufficient=answer.evidence_insufficient,
         )
 
     def _request_retrieval_step(
@@ -1038,6 +1114,21 @@ def _format_timestamp(seconds: float) -> str:
     hours, remainder = divmod(total_seconds, 3600)
     minutes, secs = divmod(remainder, 60)
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _citation_ranges(answer: str) -> tuple[tuple[float, float], ...]:
+    """Return unique ranges exactly as rendered, in first-appearance order."""
+
+    def seconds(timestamp: str) -> float:
+        hours, minutes, secs = (int(part) for part in timestamp.split(":"))
+        return float(hours * 3600 + minutes * 60 + secs)
+
+    return tuple(
+        dict.fromkeys(
+            (seconds(start), seconds(end))
+            for start, end in _CITATION_PATTERN.findall(answer)
+        )
+    )
 
 
 def _tokenize(text: str) -> tuple[str, ...]:

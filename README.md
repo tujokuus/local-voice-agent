@@ -63,7 +63,8 @@ Speaker diarization, realtime recording, GUIs, mobile clients, embeddings, and c
 - Store and display checkpoint evidence ranges and final summaries in SQLite.
 
 Transcript search, range retrieval, and the first read-only question-answering agent loop are now
-available. Retrieval-quality evaluation and agent hardening are the next implementation slices.
+available. A versioned transcript QA dataset and deterministic evaluation runner provide the first
+baseline for comparing models, agent modes, and future retrieval changes.
 
 ## Setup
 
@@ -209,6 +210,109 @@ original question is repeated after every retrieval result to reduce topic drift
 
 The default database is `data/local_voice_agent.db`. Put `--database PATH` before the subcommand to use another database.
 
+### Transcript QA evaluations
+
+`evals/poetry_session_2.json` contains 12 hand-authored cases: eight focused questions, two synthesis
+questions, and two deliberately unanswerable questions. Evidence spans the substantive poetry
+discussion; the introductory contents, term lists, references, and recording metadata are excluded.
+The dataset stores reference answers and required points for human review. Nothing in this runner
+grades natural-language correctness or calls an LLM judge.
+
+Run the forced FinalAnswer baseline from the repository root in PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe -m local_voice_agent evaluate evals/poetry_session_2.json `
+    --session-id 2 `
+    --model qwen3.5:4b `
+    --agent-mode final `
+    --label "4b lexical final baseline"
+```
+
+Run the original manual agent comparison with the same session and model:
+
+```powershell
+.\.venv\Scripts\python.exe -m local_voice_agent evaluate evals/poetry_session_2.json `
+    --session-id 2 `
+    --model qwen3.5:4b `
+    --agent-mode manual `
+    --label "4b lexical manual baseline"
+```
+
+With the virtual environment activated, `local-voice-agent evaluate ...` is equivalent. Use
+`--model qwen3.5:9b` and a corresponding label to compare the larger model after downloading it.
+A full 12-question local-model evaluation may take a substantial amount of time: each question
+can require several model requests and repairs. `--timeout` is the timeout for **each HTTP
+request**, not a total limit for a case or run. Progress is printed before and after each case;
+ordinary case errors are saved and the next case still runs. The command exits with status 1 if
+any case failed, and 0 when all selected cases completed, regardless of their metric scores.
+
+Use `--limit 1` for a small run, or repeat `--case-id ID` to select named cases. IDs are listed in
+the JSON dataset. Case filters are applied in dataset order, followed by the limit. Unknown IDs
+and invalid limits fail before model calls. The complete dataset is validated even for a subset.
+For comparisons, hold `--max-steps` (default 5) and the stored summary context constant. Pin a
+summary with `--run-id ID` (find IDs with `summary-runs 2`); otherwise the latest summary is used.
+The summary provides search orientation, so a changed summary can change retrieval results.
+
+Choose the source and history databases separately:
+
+```powershell
+.\.venv\Scripts\python.exe -m local_voice_agent --database data/local_voice_agent.db `
+    evaluate evals/poetry_session_2.json `
+    --session-id 2 --agent-mode final --model qwen3.5:4b `
+    --evaluation-database data/local_voice_agent_evaluations.db `
+    --limit 1 --timeout 600 --label "single-case check"
+```
+
+Evaluation history defaults to `data/local_voice_agent_evaluations.db`, separate from the
+application database. Each invocation appends a new run and writes each case as it finishes.
+Completed history is never replaced. Runs retain dataset/configuration snapshots and fingerprints,
+the selected transcript and summary context, model and agent mode, answers, errors, timestamps,
+latency, successful tool calls, retrieved rows, citations, and per-case metrics. References and
+required points remain available alongside generated answers for human review. Runtime databases
+remain ignored by Git; the dataset and runner are version controlled.
+
+Timestamps are the scoring key. Gold segment IDs are audit references, checked against the selected
+session before any model request. Gold boundaries from the supplied transcript use whole seconds;
+preflight accepts matching stored segment boundaries truncated to those seconds. Missing IDs,
+incomplete segment lists, and mismatched ranges are rejected. When importing the same transcript
+into a database with different auto-increment IDs, add `--remap-segment-ids` to resolve and validate
+the evidence by timestamps; the original and resolved IDs are retained for audit. Remapping checks
+each gold range's outer timestamp boundaries and segment count. Use it for copies of the same
+transcript; these checks cannot establish that the words or every internal boundary are identical.
+
+The compact report uses these deterministic metrics:
+
+| Metric | Definition |
+| --- | --- |
+| Execution success | Completed cases divided by attempted cases; also prints successful and failed counts. |
+| Answerability accuracy | Correct sufficient/insufficient decisions divided by attempted cases. A correct decision has `evidence_insufficient == (not answerable)`. Failed cases with unknown state count as incorrect in the aggregate; their per-case value is null. |
+| Retrieval evidence recall | Fraction of gold ranges overlapped by at least one transcript row actually exposed through search or range retrieval. Summary text does not count. |
+| Citation recall | Fraction of gold ranges overlapped by at least one timestamp citation in the accepted answer. |
+| Citation precision | Fraction of unique answer citation ranges overlapping any gold range. No citations means null; citations on an unanswerable case score zero. |
+| Processing time | Per-case elapsed seconds and their mean, including failed attempts, plus total run duration. |
+
+Recall is null for unanswerable cases. Aggregate recalls and precision are means over applicable
+cases, excluding null values; stored denominator counts make this explicit. Failed answerable
+cases retain available retrieval telemetry and receive zero citation recall when no accepted answer
+exists. Finite, positive-duration intervals overlap only when
+`start_a < end_b and end_a > start_b`; touching endpoints do not overlap, and scoring adds no
+tolerance. Final mode uses application-rendered citations from
+validated segment IDs. Manual mode reports the accepted answer's timestamp ranges and maps them
+back to transcript rows. These metrics measure evidence coverage and evidence-state decisions;
+even perfect overlap does not establish that an answer is correct or its full claim is supported.
+
+Retrieval remains lexical with the existing deterministic expansion. The evaluation records the
+implementation fingerprint so later hybrid-retrieval runs can be compared without changing the
+gold dataset. Model execution still depends on the installed Ollama model and local hardware;
+the deterministic part is validation and scoring, not a promise of bit-identical model output.
+
+Run the offline unit tests and Python compile checks (tests use fake providers, never Ollama):
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m compileall -q src tests
+```
+
 ### Configuration
 
 The defaults can be overridden with environment variables:
@@ -238,6 +342,7 @@ src/local_voice_agent/
 ├── agent.py                manual baseline and forced FinalAnswer workflow
 ├── config.py               environment-backed settings
 ├── models.py               validated application models
+├── evaluation/             dataset validation, deterministic metrics, runner, and history database
 ├── service.py              audio processing use case
 ├── llm/
 │   ├── base.py             provider protocol and structured response types

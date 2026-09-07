@@ -14,6 +14,7 @@ from local_voice_agent.agent import (
     SessionQuestionAgent,
 )
 from local_voice_agent.config import Settings
+from local_voice_agent.evaluation.cli import add_evaluation_parser, evaluate
 from local_voice_agent.llm import OllamaProvider
 from local_voice_agent.models import SessionStatus
 from local_voice_agent.retrieval import (
@@ -133,6 +134,8 @@ def _build_parser(settings: Settings) -> argparse.ArgumentParser:
     ask_parser.add_argument(
         "--debug", action="store_true", help="Print the agent's selected actions"
     )
+
+    add_evaluation_parser(subparsers, settings)
 
     summarize_parser = subparsers.add_parser(
         "summarize", help="Create checkpoint notes and a final summary"
@@ -696,6 +699,7 @@ def main(argv: list[str] | None = None) -> int:
             "transcript-range": _transcript_range,
             "notes": _notes,
             "ask": _ask,
+            "evaluate": evaluate,
             "summarize": _summarize,
             "summary": _summary,
             "summary-runs": _summary_runs,
