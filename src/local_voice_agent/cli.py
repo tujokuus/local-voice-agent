@@ -14,7 +14,14 @@ from local_voice_agent.agent import (
     SessionQuestionAgent,
 )
 from local_voice_agent.config import Settings
-from local_voice_agent.evaluation.cli import add_evaluation_parser, evaluate
+from local_voice_agent.evaluation.cli import (
+    add_evaluation_parser,
+    evaluate,
+    evaluate_matrix,
+    evaluation_compare,
+    evaluation_runs,
+    evaluation_show,
+)
 from local_voice_agent.llm import OllamaProvider
 from local_voice_agent.models import SessionStatus
 from local_voice_agent.retrieval import (
@@ -700,6 +707,10 @@ def main(argv: list[str] | None = None) -> int:
             "notes": _notes,
             "ask": _ask,
             "evaluate": evaluate,
+            "evaluate-matrix": evaluate_matrix,
+            "evaluation-runs": evaluation_runs,
+            "evaluation-show": evaluation_show,
+            "evaluation-compare": evaluation_compare,
             "summarize": _summarize,
             "summary": _summary,
             "summary-runs": _summary_runs,

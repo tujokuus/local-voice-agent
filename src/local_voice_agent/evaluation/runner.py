@@ -19,11 +19,16 @@ from local_voice_agent.agent import (
     SessionQuestionAgent,
 )
 from local_voice_agent.evaluation.database import EvaluationDatabase, canonical_json
-from local_voice_agent.evaluation.dataset import EvaluationDataset, validate_dataset_session
+from local_voice_agent.evaluation.dataset import (
+    EvaluationCase,
+    EvaluationDataset,
+    validate_dataset_session,
+)
 from local_voice_agent.evaluation.metrics import aggregate_metrics, compute_case_metrics
 from local_voice_agent.llm import LLMProvider
-from local_voice_agent.models import SessionStatus
+from local_voice_agent.models import SessionStatus, StoredTranscriptSegment
 from local_voice_agent.storage import Database
+from local_voice_agent.summaries import StoredFinalSummary, StoredSummaryCheckpoint
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +37,61 @@ class RunReport:
     status: str
     duration_seconds: float
     metrics: dict[str, int | float | None]
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedEvaluation:
+    dataset_bytes: bytes
+    dataset: EvaluationDataset
+    cases: tuple[EvaluationCase, ...]
+    transcript: list[StoredTranscriptSegment]
+    summary: StoredFinalSummary | None
+    checkpoints: list[StoredSummaryCheckpoint]
+    resolved_ids: dict[str, list[list[int]]]
+    transcript_json: str
+    summary_json: str
+
+
+def prepare_evaluation(
+    dataset_path: Path, database: Database, session_id: int, *,
+    case_ids: Sequence[str] | None = None, limit: int | None = None,
+    summary_run_id: int | None = None, remap_segment_ids: bool = False,
+) -> PreparedEvaluation:
+    """Validate once and retain the same input snapshots for every matrix member."""
+    if limit is not None and limit < 1:
+        raise ValueError("limit must be at least 1")
+    dataset_bytes = dataset_path.read_bytes()
+    dataset = EvaluationDataset.model_validate_json(dataset_bytes)
+    selected_ids = set(case_ids or [])
+    unknown_ids = selected_ids - {case.id for case in dataset.cases}
+    if unknown_ids:
+        raise ValueError(f"Unknown evaluation case IDs: {', '.join(sorted(unknown_ids))}")
+    cases = [case for case in dataset.cases if not selected_ids or case.id in selected_ids]
+    if limit is not None:
+        cases = cases[:limit]
+    database.initialize()
+    session = database.get_session(session_id)
+    if session is None:
+        raise LookupError(f"Session {session_id} was not found")
+    if session.status is not SessionStatus.COMPLETED:
+        raise ValueError(f"Session {session_id} is not completed")
+    transcript = database.get_transcript(session_id)
+    resolved_ids = validate_dataset_session(
+        dataset, transcript, session_id=session_id, remap_segment_ids=remap_segment_ids
+    )
+    summary = database.get_final_summary(session_id, summary_run_id)
+    if summary_run_id is not None and summary is None:
+        raise LookupError(f"Summary run {summary_run_id} was not found for session {session_id}")
+    checkpoints = database.get_summary_checkpoints(session_id, summary.id) if summary else []
+    transcript_json = canonical_json([row.model_dump(mode="json") for row in transcript])
+    summary_json = canonical_json({
+        "summary": summary.model_dump(mode="json") if summary else None,
+        "checkpoints": [checkpoint.model_dump(mode="json") for checkpoint in checkpoints],
+    })
+    return PreparedEvaluation(
+        dataset_bytes, dataset, tuple(cases), transcript, summary, checkpoints,
+        resolved_ids, transcript_json, summary_json,
+    )
 
 
 def _now() -> str:
@@ -77,6 +137,7 @@ def run_evaluation(
     configuration: dict[str, Any] | None = None,
     progress: Callable[[str], None] | None = None,
     remap_segment_ids: bool = False,
+    _prepared: PreparedEvaluation | None = None,
 ) -> RunReport:
     """Preflight the entire dataset, then isolate each case with a fresh agent.
 
@@ -97,34 +158,13 @@ def run_evaluation(
     )
     if same_path or same_file:
         raise ValueError("the evaluation database must be separate from the application database")
-    dataset_bytes = dataset_path.read_bytes()
-    dataset = EvaluationDataset.model_validate_json(dataset_bytes)
-    selected_ids = set(case_ids or [])
-    unknown_ids = selected_ids - {case.id for case in dataset.cases}
-    if unknown_ids:
-        raise ValueError(f"Unknown evaluation case IDs: {', '.join(sorted(unknown_ids))}")
-    cases = [case for case in dataset.cases if not selected_ids or case.id in selected_ids]
-    if limit is not None:
-        cases = cases[:limit]
-    database.initialize()
-    session = database.get_session(session_id)
-    if session is None:
-        raise LookupError(f"Session {session_id} was not found")
-    if session.status is not SessionStatus.COMPLETED:
-        raise ValueError(f"Session {session_id} is not completed")
-    transcript = database.get_transcript(session_id)
-    resolved_ids = validate_dataset_session(
-        dataset, transcript, session_id=session_id, remap_segment_ids=remap_segment_ids
+    prepared = _prepared or prepare_evaluation(
+        dataset_path, database, session_id, case_ids=case_ids, limit=limit,
+        summary_run_id=summary_run_id, remap_segment_ids=remap_segment_ids,
     )
-    summary = database.get_final_summary(session_id, summary_run_id)
-    if summary_run_id is not None and summary is None:
-        raise LookupError(f"Summary run {summary_run_id} was not found for session {session_id}")
-    checkpoints = database.get_summary_checkpoints(session_id, summary.id) if summary else []
-    transcript_json = canonical_json([row.model_dump(mode="json") for row in transcript])
-    summary_json = canonical_json({
-        "summary": summary.model_dump(mode="json") if summary else None,
-        "checkpoints": [checkpoint.model_dump(mode="json") for checkpoint in checkpoints],
-    })
+    dataset, cases = prepared.dataset, prepared.cases
+    transcript, summary = prepared.transcript, prepared.summary
+    checkpoints = prepared.checkpoints
     config = {
         **(configuration or {}),
         **_code_configuration(),
@@ -148,15 +188,15 @@ def run_evaluation(
         "model_name": provider.model_name,
         "agent_mode": agent_mode,
         "started_at": started_at,
-        "dataset_sha256": _sha256(dataset_bytes),
-        "transcript_sha256": _sha256(transcript_json),
-        "summary_sha256": _sha256(summary_json),
+        "dataset_sha256": _sha256(prepared.dataset_bytes),
+        "transcript_sha256": _sha256(prepared.transcript_json),
+        "summary_sha256": _sha256(prepared.summary_json),
         "dataset_snapshot_json": canonical_json({
             "dataset": dataset.model_dump(mode="json"),
-            "resolved_gold_segment_ids": resolved_ids,
+            "resolved_gold_segment_ids": prepared.resolved_ids,
         }),
-        "transcript_snapshot_json": transcript_json,
-        "summary_snapshot_json": summary_json,
+        "transcript_snapshot_json": prepared.transcript_json,
+        "summary_snapshot_json": prepared.summary_json,
         "configuration_json": canonical_json(config),
     })
     agent_class = ForcedFinalAnswerAgent if agent_mode == "final" else SessionQuestionAgent

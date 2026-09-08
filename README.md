@@ -313,6 +313,117 @@ Run the offline unit tests and Python compile checks (tests use fake providers, 
 .\.venv\Scripts\python.exe -m compileall -q src tests
 ```
 
+### View and compare evaluation results
+
+List every stored evaluation run, newest first:
+
+```powershell
+.\.venv\Scripts\python.exe -m local_voice_agent evaluation-runs
+.\.venv\Scripts\python.exe -m local_voice_agent evaluation-runs --session-id 2 --limit 10
+```
+
+Show every question and its generated answer in evaluation run 1, or one specific case:
+
+```powershell
+.\.venv\Scripts\python.exe -m local_voice_agent evaluation-show 1
+.\.venv\Scripts\python.exe -m local_voice_agent evaluation-show 1 `
+    --case-id oral_writing_printing_transition
+```
+
+The report includes the reference answer, required points for human review, gold evidence,
+retrieved ranges, actual citations, evidence-insufficient state, processing time, and errors.
+It uses the snapshots saved with that run, even if the current dataset has changed or been removed.
+An unfinished run shows its stored cases and identifies selected cases without a result yet.
+`running` is a database lifecycle state; it does not prove the original process is still alive.
+
+Compare two or more evaluation runs; the first ID is the baseline for numeric differences:
+
+```powershell
+.\.venv\Scripts\python.exe -m local_voice_agent evaluation-compare 1 2
+.\.venv\Scripts\python.exe -m local_voice_agent evaluation-compare 1 2 3 4
+.\.venv\Scripts\python.exe -m local_voice_agent evaluation-compare 1 2 `
+    --case-id oral_writing_printing_transition
+```
+
+Comparison prints run identities, aggregate metrics and deltas, and a case-by-case table. With
+`--case-id`, it also prints that question's full answers and reference points for each run.
+Aggregate metrics still cover the entire run; this filter only restricts the case details.
+Percentage differences are percentage points (`pp`); time differences are seconds. The report
+does not declare a winner or grade answer content. Null/not-applicable metrics remain `n/a`.
+Partial runs are marked explicitly and their denominators reflect only stored attempts.
+
+Dataset, transcript, summary, selected-case, metric-version, step-limit, and request-timeout
+differences prevent a default comparison. `--allow-mismatch` displays such a comparison with a
+non-equivalence notice. Model, agent-mode, and implementation changes are expected comparison
+dimensions; differing implementation fingerprints are reported without blocking comparison.
+The existing timestamp/input validation and deterministic metric definitions remain unchanged.
+
+Viewing commands open the history database read-only, make no model requests, and do not create a
+missing database. All three accept `--evaluation-database PATH`. Their positional run IDs refer to
+**evaluation runs**. In `evaluate` and `evaluate-matrix`, `--run-id` still refers to a **summary run**.
+
+### Run the model and agent comparison together
+
+Run the four combinations of qwen3.5:4b/qwen3.5:9b and final/manual:
+
+```powershell
+.\.venv\Scripts\python.exe -m local_voice_agent evaluate-matrix evals/poetry_session_2.json `
+    --session-id 2 --label "lexical baseline comparison"
+```
+
+This executes **48 question attempts** for the full dataset: four combinations with 12 questions
+each. Runs execute sequentially, with one model/mode combination completed before the next begins.
+The two models must already be available in Ollama. Each case retains the normal failure handling;
+ordinary model errors do not prevent later cases or combinations from running. Exit status is 1
+if any combination has failed cases. An explicit keyboard interruption stops the matrix and
+preserves the active run's partial history; unstarted combinations are not fabricated as failures.
+
+Start with one question per combination (four attempts in total):
+
+```powershell
+.\.venv\Scripts\python.exe -m local_voice_agent evaluate-matrix evals/poetry_session_2.json `
+    --session-id 2 --limit 1 --label "matrix smoke check"
+```
+
+Optional `--models qwen3.5:4b qwen3.5:9b` and `--agent-modes final manual` customize the matrix.
+The existing `--case-id`, `--timeout`, `--max-steps`, `--run-id`, `--remap-segment-ids`, and separate
+database options are also supported. `--limit` applies to each combination, not to the matrix total.
+
+The matrix validates and reads the dataset, transcript and chosen summary once at the beginning.
+All combinations use those same in-memory inputs, even if new summaries or transcript edits are
+saved during the run. Later matrix invocations read fresh inputs, so keep the same summary run
+selected when comparing code changes. Each child evaluation run remains independently readable.
+No earlier history is replaced and no schema migration is needed for comparison groups.
+
+A unique comparison-group UUID is printed at the start and saved in each child's
+`configuration_json`, together with the expected combinations. The combined report is printed
+after the last run. Use the printed ID to inspect the group again:
+
+```powershell
+.\.venv\Scripts\python.exe -m local_voice_agent evaluation-runs --group-id "PASTE-GROUP-ID"
+.\.venv\Scripts\python.exe -m local_voice_agent evaluation-compare --group-id "PASTE-GROUP-ID"
+```
+
+Group comparison uses the oldest run as the baseline and reports how many combinations started
+if the group is incomplete. At least two stored runs are needed for comparison; a single started
+run can always be inspected with `evaluation-show`.
+
+### Inspect the SQLite file in VS Code
+
+Install [SQLite Viewer (`qwtel.sqlite-viewer`)](https://marketplace.visualstudio.com/items?itemName=qwtel.sqlite-viewer)
+from VS Code's Extensions view. Open `data/local_voice_agent_evaluations.db`; if it opens as binary
+text, use **Reopen Editor With... → SQLite Viewer**. The basic viewer supports read-only browsing,
+sorting and filtering. It caches data, so reopen/refresh the view to see newly written results.
+
+- `evaluation_runs`: one row per evaluation run, with model, mode, label, status and aggregate metrics.
+- `evaluation_case_results`: one row per attempted question. Filter `run_id` to the evaluation ID;
+  inspect `case_id`, `question`, `answer`, `execution_success`, `processing_seconds`, and `error_text`.
+- `case_snapshot_json` contains the reference answer, required points, and gold evidence.
+  `metrics_json` contains deterministic scores. The run's `configuration_json` includes its group ID.
+
+The viewer is optional; the CLI commands above require no VS Code extension. These are local files,
+so there is no need to upload recordings or answers to a web database viewer.
+
 ### Configuration
 
 The defaults can be overridden with environment variables:
