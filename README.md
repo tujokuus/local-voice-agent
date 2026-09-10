@@ -190,7 +190,7 @@ Run the original manual agent loop as a comparison baseline:
     --agent-mode manual --debug
 ```
 
-Both modes have only three read-only tools: bounded transcript search, bounded transcript range
+All modes have only three read-only tools: bounded transcript search, bounded transcript range
 retrieval, and the selected session's stored summary. A supported factual answer requires both a
 search and inspection of a relevant transcript range. The loop has a fixed step limit.
 
@@ -199,6 +199,53 @@ the model—then reads 30 seconds on both sides of that segment. Invalid selecti
 two bounded repair attempts. Transcript search expands common English word forms and synonyms, and
 the stored session summary supplies related vocabulary for ranking search results. The summary is
 planning context only; final claims must still be verified from transcript segments.
+
+### Experimental PydanticAI mode
+
+Install the optional, version-pinned framework dependency in this project's environment:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[pydanticai]"
+.\.venv\Scripts\python.exe -m local_voice_agent ask 2 `
+    "How did writing change poetry?" --model qwen3.5:4b --agent-mode pydanticai --debug
+```
+
+`pydanticai` uses PydanticAI's native function-tool execution and argument validation during
+retrieval. A separate agent with no tools produces `NativeOutput(FinalAnswer)`. The application
+applies the same evidence rules and citation renderer as `final`: search results must be opened
+with `get_transcript` before they can support claims. Search, context windows, summary orientation,
+and evaluation metrics are shared. Pydantic validates structure and source IDs; it does not judge
+whether each claim's meaning is supported by the cited text.
+
+The step budget is 3–8 (default 5), reserving one step for the final answer. Successful tool calls,
+an explicit finish decision when used, and the accepted final answer count as steps; repair
+requests do not. There are at most two distinct searches, two application tool-repair attempts,
+and three final-output repairs. PydanticAI also limits retrieval requests to the retrieval step
+budget plus two, and final requests to four. Invalid framework arguments can consume that request
+budget. The run fails with partial telemetry if it cannot collect admissible evidence or repair
+its output. A model response containing several tool calls cannot exceed the step budget.
+
+The framework connects to the configured Ollama URL via `/v1/chat/completions`, using its
+OpenAI-compatible protocol. It requires local model support for function tools and native JSON
+schema output; there is no cloud fallback. The existing `final` and `manual` modes continue to
+use `/api/chat`. The new transport sets `temperature=0` and `reasoning_effort="none"` using
+[Ollama's compatibility fields](https://docs.ollama.com/api/openai-compatibility).
+Transport and orchestration differ, so compare measured behavior and latency;
+do not assume the new mode is better. Framework version and transport are saved with evaluation
+configuration. See the [PydanticAI Ollama documentation](https://pydantic.dev/docs/ai/models/ollama/).
+
+Evaluate the new mode with the existing history and inspection commands:
+
+```powershell
+.\.venv\Scripts\python.exe -m local_voice_agent evaluate evals/poetry_session_2.json `
+    --session-id 2 --agent-mode pydanticai --model qwen3.5:4b --limit 1 `
+    --label "pydanticai smoke check"
+```
+
+The first evaluation write upgrades an older history database's allowed agent modes in one
+transaction, preserving runs, cases, IDs, and history protection triggers. Read-only history
+commands do not migrate the database. Framework tests use scripted PydanticAI `FunctionModel`
+responses and a simulated HTTP transport; run them with the optional dependency installed.
 
 After each retrieved passage, the agent checks whether it directly answers the original question.
 It can make one different follow-up search when the first passage is irrelevant or incomplete, and
@@ -386,6 +433,16 @@ Start with one question per combination (four attempts in total):
 ```
 
 Optional `--models qwen3.5:4b qwen3.5:9b` and `--agent-modes final manual` customize the matrix.
+After installing the optional dependency, compare all three implementations on both models:
+
+```powershell
+.\.venv\Scripts\python.exe -m local_voice_agent evaluate-matrix evals/poetry_session_2.json `
+    --session-id 2 --agent-modes final manual pydanticai --label "three agent modes"
+```
+
+This runs **72 question attempts** for the full 12-question dataset. Add `--limit 1` for six
+attempts. The default matrix remains `final manual`; select `pydanticai` explicitly.
+
 The existing `--case-id`, `--timeout`, `--max-steps`, `--run-id`, `--remap-segment-ids`, and separate
 database options are also supported. `--limit` applies to each combination, not to the matrix total.
 

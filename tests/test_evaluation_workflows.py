@@ -3,7 +3,9 @@ from __future__ import annotations
 import contextlib
 import copy
 import io
+import importlib.util
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -106,6 +108,104 @@ class EvaluationWorkflowTests(unittest.TestCase):
         self.assertNotEqual(report.group_id, another.group_id)
         self.assertEqual(len(read_history(self.history.path)), 8)
         self.assertEqual(len(read_history(self.history.path, group_id=report.group_id)), 4)
+
+    def test_legacy_history_migration_preserves_cases_and_immutability(self) -> None:
+        report = self.single(limit=1)
+        original = read_history(self.history.path)
+        with self.history.connect() as connection:
+            dump = "\n".join(connection.iterdump()).replace(
+                "('final', 'manual', 'pydanticai')", "('final', 'manual')"
+            )
+        legacy = EvaluationDatabase(self.directory / "legacy.db")
+        with legacy.connect() as connection:
+            connection.execute("PRAGMA foreign_keys=OFF")
+            connection.executescript(dump)
+        legacy.initialize()
+        self.assertEqual(read_history(legacy.path), original)
+        legacy.initialize()  # Repeated initialization must preserve the upgraded data too.
+        with legacy.connect() as connection:
+            self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
+            for sql in (
+                "DELETE FROM evaluation_runs", "DELETE FROM evaluation_case_results",
+                "UPDATE evaluation_runs SET label='changed'",
+                "UPDATE evaluation_case_results SET answer='changed'",
+            ):
+                with self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute(sql)
+        metadata = dict(legacy.get_run(report.run_id))
+        metadata["agent_mode"] = "pydanticai"
+        next_id = legacy.start_run(metadata)
+        self.assertGreater(next_id, report.run_id)
+        self.assertEqual(legacy.get_run(next_id)["agent_mode"], "pydanticai")
+
+    def test_history_migration_rolls_back_when_foreign_keys_are_invalid(self) -> None:
+        self.single(limit=1)
+        with self.history.connect() as connection:
+            dump = "\n".join(connection.iterdump()).replace(
+                "('final', 'manual', 'pydanticai')", "('final', 'manual')"
+            )
+        legacy = EvaluationDatabase(self.directory / "invalid_legacy.db")
+        with legacy.connect() as connection:
+            connection.execute("PRAGMA foreign_keys=OFF")
+            connection.executescript(dump)
+            connection.execute("DROP TRIGGER evaluation_cases_no_update")
+            connection.execute("UPDATE evaluation_case_results SET run_id=999")
+            connection.commit()
+        before = legacy.path.read_bytes()
+        with self.assertRaisesRegex(RuntimeError, "foreign-key"):
+            legacy.initialize()
+        self.assertEqual(legacy.path.read_bytes(), before)
+
+    @unittest.skipUnless(importlib.util.find_spec("pydantic_ai"), "PydanticAI extra not installed")
+    def test_pydanticai_cli_and_matrix_share_history_and_metrics(self) -> None:
+        from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
+        from pydantic_ai.models.function import FunctionModel
+
+        def model_factory(*args, **kwargs):
+            calls = 0
+
+            def respond(messages, info):
+                nonlocal calls
+                calls += 1
+                if calls <= 2:
+                    return ModelResponse(parts=[ToolCallPart(
+                        "search_transcript", {"query": ("galaxies", "planets")[calls - 1]}
+                    )])
+                return ModelResponse(parts=[TextPart(json.dumps({
+                    "claims": [], "evidence_insufficient": True, "explanation": "No evidence."
+                }))])
+
+            return FunctionModel(respond)
+
+        with patch("local_voice_agent.pydantic_agent.OllamaModel", side_effect=model_factory):
+            code, output = self.cli(
+                "--database", str(self.source.path), "evaluate", str(self.dataset),
+                "--session-id", str(self.session_id), "--agent-mode", "pydanticai",
+                "--case-id", "astronomy",
+            )
+            self.assertEqual(code, 0, output)
+            code, output = self.cli(
+                "--database", str(self.source.path), "evaluate-matrix", str(self.dataset),
+                "--session-id", str(self.session_id), "--agent-modes", "pydanticai",
+                "--case-id", "astronomy",
+            )
+            self.assertEqual(code, 0, output)
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = main([
+                    "--database", str(self.source.path), "ask", str(self.session_id),
+                    "Which planet?", "--agent-mode", "pydanticai",
+                ])
+            self.assertEqual(code, 0)
+            self.assertIn("No evidence.", stdout.getvalue())
+        runs = read_history(self.history.path)
+        self.assertEqual(len(runs), 3)
+        for run in runs:
+            self.assertEqual(run["agent_mode"], "pydanticai")
+            self.assertEqual(run["status"], "completed")
+            self.assertIn("pydantic_ai_version", run["configuration"])
+            self.assertEqual(json.loads(run["cases"][0]["tool_calls_json"]),
+                             ["search_transcript", "search_transcript"])
 
     def test_matrix_freezes_dataset_transcript_and_summary_before_provider_calls(self) -> None:
         def factory(model):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -35,6 +36,7 @@ class EvaluationDatabase:
 
     def initialize(self) -> None:
         with self.connect() as connection:
+            self._upgrade_agent_modes(connection)
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS evaluation_runs (
@@ -44,7 +46,7 @@ class EvaluationDatabase:
                     label TEXT,
                     source_session_id INTEGER NOT NULL,
                     model_name TEXT NOT NULL,
-                    agent_mode TEXT NOT NULL CHECK (agent_mode IN ('final', 'manual')),
+                    agent_mode TEXT NOT NULL CHECK (agent_mode IN ('final', 'manual', 'pydanticai')),
                     started_at TEXT NOT NULL,
                     finished_at TEXT,
                     duration_seconds REAL CHECK (duration_seconds >= 0),
@@ -134,6 +136,59 @@ class EvaluationDatabase:
                 """
             )
             connection.commit()
+
+    @staticmethod
+    def _upgrade_agent_modes(connection: sqlite3.Connection) -> None:
+        """Rebuild the legacy CHECK constraint atomically, preserving history and guards."""
+        connection.execute("PRAGMA foreign_keys = OFF")
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='evaluation_runs'"
+            ).fetchone()
+            if row is None or "'pydanticai'" in row[0]:
+                connection.commit()
+                return
+            schema, count = re.subn(
+                r"\('final',\s*'manual'\)", "('final', 'manual', 'pydanticai')", row[0]
+            )
+            if count != 1:
+                raise RuntimeError("Unrecognized evaluation history schema; migration cancelled")
+            schema = schema.replace("evaluation_runs", "evaluation_runs_upgrade", 1)
+            sequence = connection.execute(
+                "SELECT seq FROM sqlite_sequence WHERE name='evaluation_runs'"
+            ).fetchone()
+            guards = connection.execute(
+                "SELECT type, name, sql FROM sqlite_master "
+                "WHERE tbl_name IN ('evaluation_runs', 'evaluation_case_results') "
+                "AND type='trigger' OR (tbl_name='evaluation_runs' AND type='index' "
+                "AND sql IS NOT NULL)"
+            ).fetchall()
+            connection.execute(schema)
+            connection.execute(
+                "INSERT INTO evaluation_runs_upgrade SELECT * FROM evaluation_runs"
+            )
+            for guard in guards:
+                if guard[0] == "trigger":
+                    name = guard[1].replace('"', '""')
+                    connection.execute(f'DROP TRIGGER "{name}"')
+            connection.execute("DROP TABLE evaluation_runs")
+            connection.execute("ALTER TABLE evaluation_runs_upgrade RENAME TO evaluation_runs")
+            if sequence is not None:
+                connection.execute(
+                    "UPDATE sqlite_sequence SET seq=MAX(seq, ?) WHERE name='evaluation_runs'",
+                    (sequence[0],),
+                )
+            for guard in guards:
+                connection.execute(guard[2])
+            if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise RuntimeError("Evaluation history migration failed its foreign-key check")
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            connection.execute("PRAGMA foreign_keys = ON")
 
     def start_run(self, metadata: dict[str, Any]) -> int:
         columns = (

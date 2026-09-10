@@ -12,12 +12,8 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from local_voice_agent.agent import (
-    MAX_AGENT_STEPS,
-    ForcedFinalAnswerAgent,
-    QuestionAnswer,
-    SessionQuestionAgent,
-)
+from local_voice_agent.agent import MAX_AGENT_STEPS, QuestionAnswer
+from local_voice_agent.agent_modes import agent_class_for
 from local_voice_agent.evaluation.database import EvaluationDatabase, canonical_json
 from local_voice_agent.evaluation.dataset import (
     EvaluationCase,
@@ -106,6 +102,7 @@ def _code_configuration() -> dict[str, Any]:
     package = Path(__file__).resolve().parent.parent
     sources = [
         package / "agent.py", package / "retrieval.py", package / "llm" / "ollama_provider.py",
+        package / "agent_modes.py", package / "pydantic_agent.py",
         *sorted(Path(__file__).parent.glob("*.py")),
     ]
     try:
@@ -144,9 +141,8 @@ def run_evaluation(
     Model/provider failures are persisted and the next case proceeds. An explicit
     interruption persists partial telemetry, finalizes history, and propagates.
     """
-    if agent_mode not in {"final", "manual"}:
-        raise ValueError("agent_mode must be 'final' or 'manual'")
-    minimum_steps = 3 if agent_mode == "final" else 1
+    agent_class = agent_class_for(agent_mode)
+    minimum_steps = 1 if agent_mode == "manual" else 3
     if not minimum_steps <= max_steps <= MAX_AGENT_STEPS:
         raise ValueError(f"max_steps for {agent_mode} must be {minimum_steps}..{MAX_AGENT_STEPS}")
     if limit is not None and limit < 1:
@@ -177,6 +173,9 @@ def run_evaluation(
         "metric_version": 1,
         "application_database_path": str(database.path.resolve()),
     }
+    if agent_mode == "pydanticai":
+        config["pydantic_ai_version"] = version("pydantic-ai-slim")
+        config["model_transport"] = "ollama-openai-compatible-v1"
     evaluation_database.initialize()
     started_at = _now()
     started = perf_counter()
@@ -199,7 +198,6 @@ def run_evaluation(
         "summary_snapshot_json": prepared.summary_json,
         "configuration_json": canonical_json(config),
     })
-    agent_class = ForcedFinalAnswerAgent if agent_mode == "final" else SessionQuestionAgent
     rows_by_id = {row.id: row for row in transcript}
     results: list[dict[str, Any]] = []
     status = "failed"

@@ -30,11 +30,14 @@ def _execution_options(
     if matrix:
         parser.add_argument("--models", nargs="+", default=["qwen3.5:4b", "qwen3.5:9b"])
         parser.add_argument(
-            "--agent-modes", nargs="+", choices=("final", "manual"), default=["final", "manual"]
+            "--agent-modes", nargs="+", choices=("final", "manual", "pydanticai"),
+            default=["final", "manual"]
         )
     else:
         parser.add_argument("--model", default=settings.ollama_model)
-        parser.add_argument("--agent-mode", choices=("final", "manual"), default="final")
+        parser.add_argument(
+            "--agent-mode", choices=("final", "manual", "pydanticai"), default="final"
+        )
     parser.add_argument("--label", help="Name for this comparison run")
     parser.add_argument(
         "--case-id", action="append", dest="case_ids",

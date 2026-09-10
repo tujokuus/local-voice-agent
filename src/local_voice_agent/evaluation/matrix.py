@@ -8,6 +8,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from local_voice_agent.agent import MAX_AGENT_STEPS
+from local_voice_agent.agent_modes import AGENT_MODES, agent_class_for
 from local_voice_agent.evaluation.database import EvaluationDatabase
 from local_voice_agent.evaluation.runner import RunReport, prepare_evaluation, run_evaluation
 from local_voice_agent.llm import LLMProvider
@@ -33,10 +34,12 @@ def run_matrix(
     if not models or len(set(models)) != len(models) or any(not name.strip() for name in models):
         raise ValueError("models must be nonempty and unique")
     if not agent_modes or len(set(agent_modes)) != len(agent_modes) or any(
-        mode not in {"final", "manual"} for mode in agent_modes
+        mode not in AGENT_MODES for mode in agent_modes
     ):
-        raise ValueError("agent modes must be unique choices of final/manual")
-    minimum = 3 if "final" in agent_modes else 1
+        raise ValueError("agent modes must be unique choices of final/manual/pydanticai")
+    for mode in agent_modes:
+        agent_class_for(mode)  # Fail before any runs if an optional dependency is missing.
+    minimum = 3 if any(mode != "manual" for mode in agent_modes) else 1
     if not minimum <= max_steps <= MAX_AGENT_STEPS:
         raise ValueError(f"max_steps must be {minimum}..{MAX_AGENT_STEPS}")
     if database.path.resolve() == evaluation_database.path.resolve() or (

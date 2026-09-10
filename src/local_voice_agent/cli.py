@@ -8,11 +8,8 @@ import sys
 from pathlib import Path
 from time import perf_counter
 
-from local_voice_agent.agent import (
-    MAX_AGENT_STEPS,
-    ForcedFinalAnswerAgent,
-    SessionQuestionAgent,
-)
+from local_voice_agent.agent import MAX_AGENT_STEPS
+from local_voice_agent.agent_modes import agent_class_for
 from local_voice_agent.config import Settings
 from local_voice_agent.evaluation.cli import (
     add_evaluation_parser,
@@ -131,11 +128,10 @@ def _build_parser(settings: Settings) -> argparse.ArgumentParser:
     )
     ask_parser.add_argument(
         "--agent-mode",
-        choices=("final", "manual"),
+        choices=("final", "manual", "pydanticai"),
         default="final",
         help=(
-            "Use forced segment-grounded FinalAnswer or the original manual agent "
-            "loop (default: final)"
+            "Use final, manual, or experimental pydanticai tool execution (default: final)"
         ),
     )
     ask_parser.add_argument(
@@ -425,11 +421,7 @@ def _ask(args: argparse.Namespace, settings: Settings) -> int:
         base_url=args.ollama_url,
         timeout_seconds=args.timeout,
     )
-    agent_class = (
-        ForcedFinalAnswerAgent
-        if args.agent_mode == "final"
-        else SessionQuestionAgent
-    )
+    agent_class = agent_class_for(args.agent_mode)
     agent = agent_class(
         provider=provider,
         transcript=transcript,
