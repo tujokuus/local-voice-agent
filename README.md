@@ -140,11 +140,18 @@ To use the optional PydanticAI mode:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e ".[pydanticai]"
+.\.venv\Scripts\python.exe -m local_voice_agent summarize 1 --summary-mode pydanticai
 .\.venv\Scripts\python.exe -m local_voice_agent ask 1 "What are the main ideas discussed?" --agent-mode pydanticai
 ```
 
 [Full usage guide](docs/usage.md): recording and note commands, configuration, agent limits,
 evaluation matrices, answer inspection, and SQLite browsing.
+
+Notes support `--summary-mode custom` (default) and `--summary-mode pydanticai`. Both share
+chunking, prompts, schemas, and a one-repair limit per checkpoint/final output. PydanticAI
+handles structured generation without retrieval tools. Each successful run records its mode;
+`summary-runs`, `summary`, and `notes` display it. Note quality has not yet been compared
+between these implementations; the experiment above concerns question answering only.
 
 ## Validation and next steps
 

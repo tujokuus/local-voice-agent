@@ -142,6 +142,44 @@ planning context only; final claims must still be verified from transcript segme
 
 ### Experimental PydanticAI mode
 
+For **note generation**, use `--summary-mode` on `summarize`. For **question answering**,
+use `--agent-mode` on `ask` or evaluation commands. These are separate workflows.
+
+Install the optional dependency once, then choose a note-generation implementation:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[pydanticai]"
+.\.venv\Scripts\python.exe -m local_voice_agent summarize 2 --summary-mode pydanticai --model qwen3.5:4b --content-mode informational --label "pydanticai 4b notes"
+.\.venv\Scripts\python.exe -m local_voice_agent summarize 2 --summary-mode custom --model qwen3.5:4b --content-mode informational --label "custom 4b notes"
+.\.venv\Scripts\python.exe -m local_voice_agent summary-runs 2
+```
+
+Use your session ID and select `--model qwen3.5:9b` to run the larger model after downloading
+it. `custom` remains the default. Both implementations share transcript chunking, previous
+checkpoint context, prompts, response schemas, content validation, and a maximum of one
+correction per checkpoint or final summary. PydanticAI uses tool-free native structured output
+and framework-managed validation retries via Ollama's OpenAI-compatible endpoint. It does
+not reuse the question-answering retrieval agent.
+
+Each completed run saves its `summary_mode` in SQLite. Older runs are retained and marked
+`custom` by an additive schema migration. Read a chosen result using the ID printed by
+`summary-runs` (replace example ID 5):
+
+```powershell
+.\.venv\Scripts\python.exe -m local_voice_agent summary 2 --run-id 5
+.\.venv\Scripts\python.exe -m local_voice_agent notes --session-id 2 --run-id 5
+```
+
+Without a run ID, `summary` shows the newest successful run; `notes --session-id 2` shows notes
+from all successful runs. A failed generation does not save a partial summary or replace a
+previous successful run. Both implementations store accepted raw responses, per-attempt
+durations, checkpoint ranges, and total processing time. Framework attempt durations measure
+model-request time; total processing time also includes orchestration and validation overhead.
+There is no note-quality scoring or note comparison matrix yet. Keep model, chunk size,
+content mode, and transcript constant when preparing a later comparison.
+
+The following commands concern **question answering**:
+
 Install the optional, version-pinned framework dependency in this project's environment:
 
 ```powershell
@@ -451,4 +489,3 @@ The first capability check was completed with OpenAI Whisper's small `tests/jfk.
 An earlier summary slice was verified with a 15-minute English spoken article. Current summaries
 deliberately use a smaller schema focused on useful notes; detailed claims, concepts, terminology
 checks, decisions, action items, and evidence linking are deferred to later development.
-

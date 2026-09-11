@@ -29,7 +29,7 @@ from local_voice_agent.retrieval import (
 )
 from local_voice_agent.service import SessionProcessor
 from local_voice_agent.storage import Database
-from local_voice_agent.summaries import SessionSummarizer
+from local_voice_agent.summaries.modes import summarizer_class_for
 from local_voice_agent.transcription import FasterWhisperTranscriber
 
 
@@ -144,6 +144,10 @@ def _build_parser(settings: Settings) -> argparse.ArgumentParser:
         "summarize", help="Create checkpoint notes and a final summary"
     )
     summarize_parser.add_argument("session_id", type=int)
+    summarize_parser.add_argument(
+        "--summary-mode", choices=("custom", "pydanticai"), default="custom",
+        help="Note generation implementation (default: custom)",
+    )
     summarize_parser.add_argument("--model", default=settings.ollama_model)
     summarize_parser.add_argument("--ollama-url", default=settings.ollama_base_url)
     summarize_parser.add_argument(
@@ -383,6 +387,7 @@ def _notes(args: argparse.Namespace, settings: Settings) -> int:
             printed_runs += 1
             label = f"; label={run.label}" if run.label else ""
             print(f"\nSession {session.id}, summary run {run.id}{label}")
+            print(f"Model: {run.model_name}; summary mode: {run.summary_mode}")
             _print_string_list("Important notes", summary.important_notes)
             print("\nCheckpoint notes")
             for checkpoint, note in checkpoint_notes:
@@ -449,6 +454,7 @@ def _ask(args: argparse.Namespace, settings: Settings) -> int:
 
 
 def _summarize(args: argparse.Namespace, settings: Settings) -> int:
+    summarizer_class = summarizer_class_for(args.summary_mode)
     if args.timeout <= 0:
         raise ValueError("--timeout must be greater than zero")
     if args.chunk_seconds <= 0:
@@ -473,7 +479,7 @@ def _summarize(args: argparse.Namespace, settings: Settings) -> int:
         base_url=args.ollama_url,
         timeout_seconds=args.timeout,
     )
-    summarizer = SessionSummarizer(
+    summarizer = summarizer_class(
         provider=provider,
         target_chunk_seconds=args.chunk_seconds,
         minimum_final_chunk_seconds=min(
@@ -482,7 +488,7 @@ def _summarize(args: argparse.Namespace, settings: Settings) -> int:
         ),
     )
 
-    print(f"Summarizing session {session.id} with {args.model}...")
+    print(f"Summarizing session {session.id} with {args.model} ({args.summary_mode})...")
 
     def report_progress(current: int, total: int) -> None:
         print(f"Creating checkpoint {current}/{total}...")
@@ -500,6 +506,7 @@ def _summarize(args: argparse.Namespace, settings: Settings) -> int:
         content_mode=args.content_mode,
         label=args.label,
         bundle=bundle,
+        summary_mode=args.summary_mode,
     )
 
     print(f"Summary run ID: {summary_run_id}")
@@ -543,6 +550,7 @@ def _summary(args: argparse.Namespace, settings: Settings) -> int:
     if final_summary.label:
         print(f"Label: {final_summary.label}")
     print(f"Model: {final_summary.model_name}")
+    print(f"Summary mode: {final_summary.summary_mode}")
     if final_summary.chunk_seconds is not None:
         print(f"Target chunk size: {_format_timestamp(final_summary.chunk_seconds)}")
     print(f"Content mode: {final_summary.content_mode}")
@@ -615,7 +623,7 @@ def _summary_runs(args: argparse.Namespace, settings: Settings) -> int:
         label = f"  label={run.label}" if run.label else ""
         print(
             f"{run.id:>4}  model={run.model_name:<14}  chunks={run.checkpoint_count:<3} "
-            f"target={chunk}  mode={run.content_mode:<13} "
+            f"target={chunk}  mode={run.content_mode:<13} implementation={run.summary_mode} "
             f"processing={processing}{label}"
         )
     return 0

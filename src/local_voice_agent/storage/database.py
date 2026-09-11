@@ -22,7 +22,7 @@ from local_voice_agent.summaries.models import (
 )
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 class Database:
@@ -255,6 +255,10 @@ class Database:
                 connection, "summary_run_checkpoints", "notes_json"
             )
             self._migrate_legacy_summaries(connection)
+            self._add_column_if_missing(
+                connection, "summary_runs", "summary_mode",
+                "TEXT NOT NULL DEFAULT 'custom' CHECK (summary_mode IN ('custom', 'pydanticai'))",
+            )
             connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             connection.commit()
 
@@ -372,8 +376,12 @@ class Database:
         content_mode: ContentMode,
         label: str | None,
         bundle: GeneratedSummaryBundle,
+        summary_mode: str = "custom",
     ) -> int:
         """Append one complete summary run after every LLM call succeeds."""
+
+        if summary_mode not in {"custom", "pydanticai"}:
+            raise ValueError("summary_mode must be custom or pydanticai")
 
         with self.connect() as connection:
             session = connection.execute(
@@ -396,8 +404,8 @@ class Database:
                     uncertainties_json, terms_to_verify_json, decisions_json,
                     action_items_json, open_questions_json, checkpoint_count,
                     raw_response, processing_seconds, final_generation_seconds,
-                    final_attempt_seconds_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    final_attempt_seconds_json, summary_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
@@ -422,6 +430,7 @@ class Database:
                     bundle.processing_seconds,
                     bundle.final_generation_seconds,
                     self._json(bundle.final_attempt_seconds),
+                    summary_mode,
                 ),
             )
             summary_run_id = int(cursor.lastrowid)
@@ -516,6 +525,7 @@ class Database:
             return None
 
         return StoredFinalSummary(
+            summary_mode=row["summary_mode"],
             id=row["id"],
             session_id=row["session_id"],
             label=row["label"],
@@ -543,7 +553,7 @@ class Database:
         with self.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT id, session_id, label, model_name, chunk_seconds, content_mode,
+                SELECT id, session_id, label, model_name, chunk_seconds, content_mode, summary_mode,
                        checkpoint_count, processing_seconds,
                        final_generation_seconds, created_at
                 FROM summary_runs

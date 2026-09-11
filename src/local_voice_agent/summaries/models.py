@@ -264,6 +264,7 @@ class StoredSummaryCheckpoint(Checkpoint):
 
 
 class StoredFinalSummary(FinalSessionSummary):
+    summary_mode: Literal["custom", "pydanticai"] = "custom"
     id: int
     session_id: int
     label: str | None = None
@@ -278,6 +279,7 @@ class StoredFinalSummary(FinalSessionSummary):
 
 
 class StoredSummaryRun(BaseModel):
+    summary_mode: Literal["custom", "pydanticai"] = "custom"
     model_config = ConfigDict(frozen=True)
 
     id: int
